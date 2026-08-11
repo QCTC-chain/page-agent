@@ -15,6 +15,13 @@ export interface PanelConfig {
 	 * @default true
 	 */
 	promptForNextTask?: boolean
+	/**
+	 * Panel placement on screen
+	 * - `bottom-center`: floating bar centered at the bottom of the page (default)
+	 * - `bottom-right`: drawer-style panel anchored to the bottom-right corner
+	 * @default 'bottom-center'
+	 */
+	position?: 'bottom-center' | 'bottom-right'
 }
 
 /**
@@ -72,6 +79,9 @@ export class Panel {
 
 		// Create UI elements
 		this.#wrapper = this.#createWrapper()
+		if (config.position === 'bottom-right') {
+			this.#wrapper.classList.add(styles.bottomRight)
+		}
 		this.#indicator = this.#wrapper.querySelector(`.${styles.indicator}`)!
 		this.#statusText = this.#wrapper.querySelector(`.${styles.statusText}`)!
 		this.#historySection = this.#wrapper.querySelector(`.${styles.historySection}`)!
@@ -224,15 +234,20 @@ export class Panel {
 	// ========== Public control methods ==========
 
 	show(): void {
-		this.wrapper.style.display = 'block'
+		// Drawer variant lays out as a flex column; popover uses block layout
+		this.wrapper.style.display = this.#config.position === 'bottom-right' ? 'flex' : 'block'
 		void this.wrapper.offsetHeight
 		this.wrapper.style.opacity = '1'
-		this.wrapper.style.transform = 'translateX(-50%) translateY(0)'
+		this.wrapper.style.transform =
+			this.#config.position === 'bottom-right' ? 'translateY(0)' : 'translateX(-50%) translateY(0)'
 	}
 
 	hide(): void {
 		this.wrapper.style.opacity = '0'
-		this.wrapper.style.transform = 'translateX(-50%) translateY(20px)'
+		this.wrapper.style.transform =
+			this.#config.position === 'bottom-right'
+				? 'translateY(100%)' // drawer closes by sliding below its own height
+				: 'translateX(-50%) translateY(20px)'
 		this.wrapper.style.display = 'none'
 	}
 

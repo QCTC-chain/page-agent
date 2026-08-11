@@ -535,6 +535,108 @@
 	}
 }
 
+/* ========== Bottom-right drawer variant ========== */
+.bottomRight {
+	left: auto;
+	right: 24px;
+	bottom: 24px;
+
+	/* Drawer close state: slide below its own height (matches hide() transform) */
+	transform: translateY(100%);
+
+	/* Drawer is one flex column: header on top, history in the middle, input at the bottom */
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+
+	/* Decorative glow belongs to the popover look; hide it for a clean drawer */
+	.background {
+		display: none;
+	}
+
+	/* Header becomes the top bar of the drawer */
+	.header {
+		position: static;
+		order: 0;
+		height: var(--height);
+		flex-shrink: 0;
+		background: rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(10px);
+	}
+
+	/* History and input become regular flex items (order overrides DOM order) */
+	.historySectionWrapper {
+		position: static;
+		order: 1;
+		width: auto;
+		left: auto;
+		bottom: auto;
+		z-index: auto;
+	}
+
+	.inputSectionWrapper {
+		position: static;
+		order: 2;
+		width: auto;
+		top: auto;
+		left: auto;
+		z-index: auto;
+		flex-shrink: 0;
+	}
+
+	/* Collapsed: keep only the header bar; input appears when the drawer opens */
+	&:not(.expanded) .inputSectionWrapper {
+		visibility: collapse;
+		height: 0;
+	}
+
+	/* Expanded: one seamless rounded panel */
+	&.expanded {
+		height: min(600px, calc(100vh - 120px));
+		border-radius: 16px;
+		background: rgba(2, 0, 20, 0.65);
+		backdrop-filter: blur(10px);
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+
+		/* Header: flat divider at the top of the panel */
+		.header {
+			background: transparent;
+			backdrop-filter: none;
+			box-shadow: none;
+			border-radius: 0;
+			border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+		}
+
+		/* History: transparent middle section, scrolls inside the panel */
+		.historySectionWrapper {
+			flex: 1 1 auto;
+			min-height: 0;
+			visibility: visible;
+			background: transparent;
+			border: none;
+			box-shadow: none;
+			border-radius: 0;
+			backdrop-filter: none;
+
+			.historySection {
+				max-height: none;
+				height: 100%;
+			}
+		}
+
+		/* Input: transparent footer with a top divider */
+		.inputSectionWrapper {
+			background: transparent;
+			border: none;
+			box-shadow: none;
+			border-radius: 0;
+			backdrop-filter: none;
+			border-top: 1px solid rgba(255, 255, 255, 0.12);
+		}
+	}
+}
+
 /* 输入区域样式 */
 .inputSectionWrapper {
 	position: absolute;

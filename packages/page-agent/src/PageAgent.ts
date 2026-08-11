@@ -24,6 +24,7 @@ export class PageAgent extends PageAgentCore {
 		this.panel = new Panel(this, {
 			language: config.language,
 			promptForNextTask: config.promptForNextTask,
+			position: config.position,
 		})
 	}
 }

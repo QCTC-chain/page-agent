@@ -33,8 +33,10 @@ if (autoInit) {
 			const baseURL = url.searchParams.get('baseURL') || DEMO_BASE_URL
 			const apiKey = url.searchParams.get('apiKey') || DEMO_API_KEY
 			const language = (url.searchParams.get('lang') as 'zh-CN' | 'en-US') || 'zh-CN'
+			const position =
+				(url.searchParams.get('position') as 'bottom-center' | 'bottom-right') || 'bottom-center'
 			showPanel = ((url.searchParams.get('showPanel') as 'true' | 'false') || 'true') === 'true'
-			config = { model, baseURL, apiKey, language }
+			config = { model, baseURL, apiKey, language, position }
 		} else {
 			console.log('🚀 page-agent.js no current script detected, using default demo config')
 			config = {
