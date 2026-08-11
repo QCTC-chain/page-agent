@@ -1,6 +1,16 @@
 /**
  * IIFE demo entry - auto-initializes with built-in demo API for testing
+ *
+ * Exposes the following classes on `window` for third-party embedding:
+ * - `PageAgent`       - full agent with built-in Panel UI
+ * - `PageAgentCore`   - headless core agent (no UI), requires a `pageController`
+ * - `PageController`  - DOM interaction controller (mask, clicking, typing, ...)
+ *
+ * `CustomEvent` is the native browser API and needs no export.
  */
+import { PageAgentCore } from '@page-agent/core'
+import { PageController } from '@page-agent/page-controller'
+
 import { PageAgent, type PageAgentConfig } from './PageAgent'
 
 const currentScript = document.currentScript as HTMLScriptElement | null
@@ -14,6 +24,8 @@ if (autoInit && window.pageAgent) {
 
 // Mount to global window object
 window.PageAgent = PageAgent
+window.PageAgentCore = PageAgentCore
+window.PageController = PageController
 
 console.log('🚀 page-agent.js loaded!')
 
