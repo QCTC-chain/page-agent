@@ -637,6 +637,55 @@
 	}
 }
 
+/* 浮动重新打开按钮：面板被关闭后保留入口，避免只能刷新页面找回 */
+.launcher {
+	position: fixed;
+	bottom: 100px;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	border: 1px solid rgba(255, 255, 255, 0.35);
+	background: rgba(0, 0, 0, 0.55);
+	backdrop-filter: blur(10px);
+	color: white;
+	font-size: 20px;
+	line-height: 1;
+	cursor: pointer;
+	z-index: 2147483642; /* 与面板保持一致 */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow:
+		0 0 8px rgba(57, 182, 255, 0.35),
+		0 4px 16px rgba(0, 0, 0, 0.4);
+	transition: all 0.2s ease-in-out;
+
+	&:hover {
+		transform: translateX(-50%) scale(1.08);
+		background: rgba(0, 0, 0, 0.7);
+		box-shadow:
+			0 0 12px rgba(57, 182, 255, 0.6),
+			0 6px 20px rgba(0, 0, 0, 0.5);
+	}
+
+	&.hidden {
+		display: none;
+	}
+
+	&.bottomRight {
+		left: auto;
+		right: 24px;
+		bottom: 24px;
+		transform: none;
+
+		&:hover {
+			transform: scale(1.08);
+		}
+	}
+}
+
 /* 输入区域样式 */
 .inputSectionWrapper {
 	position: absolute;

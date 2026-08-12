@@ -146,6 +146,11 @@ console.log(result.history) // Full execution history`}
 						? 'PageAgent 自动创建一个 Panel 实例。你可以通过 panel 属性控制 UI：'
 						: 'PageAgent automatically creates a Panel instance. You can control the UI via the panel property:'}
 				</p>
+				<p className="text-gray-600 dark:text-gray-400 mb-4">
+					{isZh
+						? '面板闲置时点击关闭按钮（X）只会隐藏面板，并显示一个浮动按钮用于随时重新打开；Agent 与历史记录都会保留，刷新页面不再是找回面板的唯一方式。'
+						: 'While idle, clicking the close button (X) only hides the panel and leaves a floating button to reopen it anytime. The agent and its history stay alive, so reloading the page is no longer required to bring the panel back.'}
+				</p>
 				<CodeEditor
 					language="typescript"
 					code={`// Show/hide the panel

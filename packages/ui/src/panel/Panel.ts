@@ -43,6 +43,7 @@ export class Panel {
 	#actionButton: HTMLElement
 	#inputSection: HTMLElement
 	#taskInput: HTMLInputElement
+	#launcher: HTMLElement
 
 	#agent: PanelAgentAdapter
 	#config: PanelConfig
@@ -89,6 +90,10 @@ export class Panel {
 		this.#actionButton = this.#wrapper.querySelector(`.${styles.stopButton}`)!
 		this.#inputSection = this.#wrapper.querySelector(`.${styles.inputSectionWrapper}`)!
 		this.#taskInput = this.#wrapper.querySelector(`.${styles.taskInput}`)!
+		this.#launcher = this.#createLauncher()
+		if (config.position === 'bottom-right') {
+			this.#launcher.classList.add(styles.bottomRight)
+		}
 
 		// Listen to agent events
 		this.#agent.addEventListener('statuschange', this.#onStatusChange)
@@ -234,6 +239,9 @@ export class Panel {
 	// ========== Public control methods ==========
 
 	show(): void {
+		// Reopening the panel (from the launcher or a running task) hides the launcher again
+		this.#hideLauncher()
+
 		// Drawer variant lays out as a flex column; popover uses block layout
 		this.wrapper.style.display = this.#config.position === 'bottom-right' ? 'flex' : 'block'
 		void this.wrapper.offsetHeight
@@ -284,6 +292,7 @@ export class Panel {
 		// Clean up UI
 		this.#isWaitingForUserAnswer = false
 		this.#stopHeaderUpdateLoop()
+		this.#launcher.remove()
 		this.wrapper.remove()
 	}
 
@@ -312,14 +321,53 @@ export class Panel {
 	}
 
 	/**
-	 * Action button handler: stop when running, close (dispose) when idle
+	 * Action button handler: stop when running, close (hide + launcher) when idle
 	 */
 	#handleActionButton(): void {
 		if (this.#agent.status === 'running') {
 			this.#agent.stop()
 		} else {
-			this.#agent.dispose()
+			this.#close()
 		}
+	}
+
+	/**
+	 * Close the panel: hide the UI but keep the agent alive.
+	 * A floating launcher remains so the user can reopen the panel without
+	 * reloading the page. History and agent state are preserved.
+	 */
+	#close(): void {
+		this.hide()
+		this.#showLauncher()
+	}
+
+	/**
+	 * Create the floating launcher button used to reopen a closed panel.
+	 * It is appended to the document body and hidden until the panel is closed.
+	 */
+	#createLauncher(): HTMLElement {
+		const launcher = document.createElement('button')
+		launcher.id = 'page-agent-runtime_agent-panel-launcher'
+		launcher.type = 'button'
+		launcher.className = styles.launcher
+		launcher.title = this.#i18n.t('ui.panel.reopen')
+		launcher.setAttribute('aria-label', this.#i18n.t('ui.panel.reopen'))
+		launcher.setAttribute('data-page-agent-ignore', 'true')
+		launcher.textContent = '🤖'
+		launcher.classList.add(styles.hidden)
+
+		document.body.appendChild(launcher)
+		return launcher
+	}
+
+	/** Show the floating launcher button */
+	#showLauncher(): void {
+		this.#launcher.classList.remove(styles.hidden)
+	}
+
+	/** Hide the floating launcher button */
+	#hideLauncher(): void {
+		this.#launcher.classList.add(styles.hidden)
 	}
 
 	/**
@@ -471,6 +519,12 @@ export class Panel {
 		this.#actionButton.addEventListener('click', (e) => {
 			e.stopPropagation()
 			this.#handleActionButton()
+		})
+
+		// Launcher button (reopen a closed panel)
+		this.#launcher.addEventListener('click', (e) => {
+			e.stopPropagation()
+			this.show()
 		})
 
 		// Submit on Enter key in input field
