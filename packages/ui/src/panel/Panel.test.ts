@@ -62,6 +62,18 @@ describe('Panel close / reopen', () => {
 		expect(agent.dispose).not.toHaveBeenCalled()
 	})
 
+	it('exposes close() to hide the panel and show the launcher without disposing the agent', () => {
+		const { agent, panel } = createPanel()
+		const wrapper = document.getElementById(PANEL_ID)!
+		const launcher = document.getElementById(LAUNCHER_ID)!
+
+		panel.close()
+
+		expect(wrapper.style.display).toBe('none')
+		expect(launcher.classList.contains(styles.hidden)).toBe(false)
+		expect(agent.dispose).not.toHaveBeenCalled()
+	})
+
 	it('restores the panel when the launcher is clicked', () => {
 		createPanel()
 		const wrapper = document.getElementById(PANEL_ID)!
@@ -71,6 +83,19 @@ describe('Panel close / reopen', () => {
 
 		launcher.click()
 
+		expect(wrapper.style.display).not.toBe('none')
+		expect(launcher.classList.contains(styles.hidden)).toBe(true)
+	})
+
+	it('opens the expanded conversation panel when the launcher is clicked', () => {
+		createPanel()
+		const wrapper = document.getElementById(PANEL_ID)!
+		const launcher = document.getElementById(LAUNCHER_ID)!
+		wrapper.querySelector<HTMLButtonElement>('button[title="Close"]')!.click()
+
+		launcher.click()
+
+		expect(wrapper.classList.contains(styles.expanded)).toBe(true)
 		expect(wrapper.style.display).not.toBe('none')
 		expect(launcher.classList.contains(styles.hidden)).toBe(true)
 	})

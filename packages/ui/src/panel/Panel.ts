@@ -259,6 +259,14 @@ export class Panel {
 		this.wrapper.style.display = 'none'
 	}
 
+	/**
+	 * Close the panel: hide the conversation UI and show the floating launcher.
+	 * The agent and its history stay alive, so the panel can be reopened later.
+	 */
+	close(): void {
+		this.#close()
+	}
+
 	reset(): void {
 		this.#statusText.textContent = this.#i18n.t('ui.panel.ready')
 		this.#updateStatusIndicator('thinking')
@@ -525,6 +533,7 @@ export class Panel {
 		this.#launcher.addEventListener('click', (e) => {
 			e.stopPropagation()
 			this.show()
+			this.expand()
 		})
 
 		// Submit on Enter key in input field

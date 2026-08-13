@@ -81,8 +81,8 @@ export default function QuickStart() {
 					/>
 					<p className="text-sm text-gray-600 dark:text-gray-300">
 						{isZh
-							? '添加 autoInit=false 参数可只加载脚本，不自动创建 Demo Agent，之后可通过 new window.PageAgent(...) 手动初始化，并使用自定义 LLM。'
-							: 'Add the autoInit=false parameter to load the script without creating the demo agent automatically. You can then instantiate it with new window.PageAgent(...) and your own LLMs.'}
+							? '默认加载后显示一个浮动 🤖 按钮，点击后打开对话面板。添加 autoInit=false 参数可只加载脚本，不自动创建 Demo Agent，之后可通过 new window.PageAgent(...) 手动初始化，并使用自定义 LLM。'
+							: 'By default, the demo shows a floating 🤖 button that opens the conversation panel when clicked. Add the autoInit=false parameter to load the script without creating the demo agent automatically. You can then instantiate it with new window.PageAgent(...) and your own LLMs.'}
 					</p>
 				</div>
 

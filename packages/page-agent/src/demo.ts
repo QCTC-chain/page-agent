@@ -61,7 +61,9 @@ if (autoInit) {
 		// Create agent
 		window.pageAgent = new PageAgent(config)
 		if (showPanel) {
-			window.pageAgent.panel.show()
+			// Default entry is a floating launcher button; clicking it opens the
+			// conversation panel. Call panel.show() instead to open it directly.
+			window.pageAgent.panel.close()
 		}
 
 		console.log('🚀 page-agent.js initialized with config:', window.pageAgent.config)
