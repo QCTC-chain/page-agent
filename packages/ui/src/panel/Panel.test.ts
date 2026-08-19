@@ -16,7 +16,12 @@ class FakeAgent extends EventTarget implements PanelAgentAdapter {
 	task = ''
 	onAskUser = undefined
 
-	execute = vi.fn(async () => {})
+	/** Simulate the core clearing only its active-task history at task start. */
+	execute = vi.fn(async (task: string) => {
+		this.task = task
+		this.history = []
+		this.dispatchEvent(new Event('historychange'))
+	})
 	stop = vi.fn(async () => {})
 	dispose = vi.fn()
 
@@ -85,6 +90,50 @@ describe('Panel close / reopen', () => {
 
 		expect(wrapper.style.display).not.toBe('none')
 		expect(launcher.classList.contains(styles.hidden)).toBe(true)
+	})
+
+	it('keeps prior task cards when a new task resets the core history', async () => {
+		const { agent } = createPanel()
+		const wrapper = document.getElementById(PANEL_ID)!
+		const input = wrapper.querySelector<HTMLInputElement>('input')!
+
+		agent.task = 'first task'
+		agent.history = [
+			{
+				type: 'step',
+				stepIndex: 0,
+				reflection: { memory: 'first task memory' },
+				action: { name: 'done', input: { text: 'first result' }, output: 'first result' },
+			},
+		]
+		agent.dispatchEvent(new Event('historychange'))
+
+		input.value = 'second task'
+		input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+		await vi.waitFor(() => expect(agent.execute).toHaveBeenCalledWith('second task'))
+
+		expect(wrapper.textContent).toContain('first task')
+		expect(wrapper.textContent).toContain('first result')
+		expect(wrapper.textContent).toContain('second task')
+	})
+
+	it('clears the UI session history when the panel is closed', () => {
+		const { agent } = createPanel()
+		const wrapper = document.getElementById(PANEL_ID)!
+
+		agent.task = 'completed task'
+		agent.history = [
+			{
+				type: 'step',
+				stepIndex: 0,
+				action: { name: 'done', input: { text: 'completed result' }, output: 'completed result' },
+			},
+		]
+		agent.dispatchEvent(new Event('historychange'))
+		wrapper.querySelector<HTMLButtonElement>('button[title="Close"]')!.click()
+
+		expect(wrapper.textContent).not.toContain('completed task')
+		expect(wrapper.textContent).not.toContain('completed result')
 	})
 
 	it('opens the expanded conversation panel when the launcher is clicked', () => {

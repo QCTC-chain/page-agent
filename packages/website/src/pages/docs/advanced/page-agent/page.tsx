@@ -149,7 +149,7 @@ console.log(result.history) // Full execution history`}
 				<p className="text-gray-600 dark:text-gray-400 mb-4">
 					{isZh
 						? '面板闲置时点击关闭按钮（X）只会隐藏面板，并显示一个浮动 🤖 按钮用于随时重新打开；点击该按钮会直接展开对话面板。Agent 与历史记录都会保留，刷新页面不再是找回面板的唯一方式。'
-						: 'While idle, clicking the close button (X) only hides the panel and leaves a floating 🤖 button to reopen it anytime. Clicking the launcher expands the conversation panel directly. The agent and its history stay alive, so reloading the page is no longer required to bring the panel back.'}
+						: 'While idle, clicking the close button (X) clears the displayed conversation and leaves a floating 🤖 button to reopen the reusable agent anytime. Clicking the launcher expands the panel directly, so reloading the page is not required.'}
 				</p>
 				<CodeEditor
 					language="typescript"

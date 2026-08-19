@@ -24,6 +24,12 @@ export interface PanelConfig {
 	position?: 'bottom-center' | 'bottom-right'
 }
 
+/** A completed or active task snapshot rendered in the panel session. */
+interface PanelHistorySession {
+	task: string
+	history: PanelAgentAdapter['history']
+}
+
 /**
  * Agent control panel
  *
@@ -54,6 +60,14 @@ export class Panel {
 	#headerUpdateTimer: ReturnType<typeof setInterval> | null = null
 	#pendingHeaderText: string | null = null
 	#isAnimating = false
+	/** Reference used to distinguish a new core task from incremental history updates. */
+	#activeCoreHistory: PanelAgentAdapter['history'] | null = null
+	/**
+	 * UI-only session history. PageAgentCore resets its history for every task so
+	 * the model receives only the active task context; the Panel keeps snapshots
+	 * here until the user closes it.
+	 */
+	#historySessions: PanelHistorySession[] = []
 
 	// Event handlers (bound for removal)
 	#onStatusChange = () => this.#handleStatusChange()
@@ -146,8 +160,9 @@ export class Panel {
 		}
 	}
 
-	/** Handle agent history change - re-render history list from agent.history */
+	/** Synchronize the active task history into the UI-only session history. */
 	#handleHistoryChange(): void {
+		this.#syncHistorySession()
 		this.#renderHistory()
 	}
 
@@ -260,8 +275,8 @@ export class Panel {
 	}
 
 	/**
-	 * Close the panel: hide the conversation UI and show the floating launcher.
-	 * The agent and its history stay alive, so the panel can be reopened later.
+	 * Close the panel: clear the displayed conversation, hide the UI, and show
+	 * the floating launcher. The agent remains reusable after reopening.
 	 */
 	close(): void {
 		this.#close()
@@ -270,6 +285,7 @@ export class Panel {
 	reset(): void {
 		this.#statusText.textContent = this.#i18n.t('ui.panel.ready')
 		this.#updateStatusIndicator('thinking')
+		this.#historySessions = []
 		this.#renderHistory()
 		this.#collapse()
 		// Reset user input state
@@ -340,11 +356,12 @@ export class Panel {
 	}
 
 	/**
-	 * Close the panel: hide the UI but keep the agent alive.
-	 * A floating launcher remains so the user can reopen the panel without
-	 * reloading the page. History and agent state are preserved.
+	 * Close the panel: hide the UI, clear its session history, and keep the
+	 * reusable agent alive. A floating launcher remains for reopening it.
 	 */
 	#close(): void {
+		this.#historySessions = []
+		this.#renderHistory()
 		this.hide()
 		this.#showLauncher()
 	}
@@ -664,10 +681,30 @@ export class Panel {
 	}
 
 	/**
-	 * Render history directly from agent.history
+	 * Copy the core's active task history into the Panel's display session.
+	 * The core intentionally resets its history between tasks, while the Panel
+	 * retains previous task snapshots until it is closed.
+	 */
+	#syncHistorySession(): void {
+		const task = this.#agent.task
+		if (!task) return
+
+		const latestSession = this.#historySessions.at(-1)
+		const coreHistory = this.#agent.history
+		if (!latestSession || latestSession.task !== task || this.#activeCoreHistory !== coreHistory) {
+			this.#historySessions.push({ task, history: [...coreHistory] })
+			this.#activeCoreHistory = coreHistory
+			return
+		}
+
+		latestSession.history = [...coreHistory]
+	}
+
+	/**
+	 * Render the Panel's UI-only session history.
 	 *
 	 * Renders:
-	 * 1. Task (first item, from agent.task)
+	 * 1. Each submitted task
 	 * 2. Reflection cards (evaluation, memory, next_goal)
 	 * 3. Tool execution with output
 	 * 4. Observations
@@ -675,19 +712,16 @@ export class Panel {
 	#renderHistory(): void {
 		const items: string[] = []
 
-		// 1. Task card (always first)
-		const task = this.#agent.task
-		if (task) {
-			items.push(this.#createTaskCard(task))
+		for (const session of this.#historySessions) {
+			items.push(this.#createTaskCard(session.task))
+			for (const event of session.history) {
+				items.push(...this.#createHistoryCards(event))
+			}
 		}
 
-		// 2. Render each history event
-		const history = this.#agent.history
-		for (const event of history) {
-			items.push(...this.#createHistoryCards(event))
-		}
-
-		this.#historySection.innerHTML = items.join('')
+		this.#historySection.innerHTML =
+			items.join('') ||
+			`<div class="${styles.historyItem}"><div class="${styles.historyContent}"><span class="${styles.statusIcon}">🧠</span><span>${this.#i18n.t('ui.panel.waitingPlaceholder')}</span></div></div>`
 		this.#scrollToBottom()
 	}
 
