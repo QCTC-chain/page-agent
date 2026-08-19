@@ -24,7 +24,7 @@ export default defineConfig(() => ({
 		lib: {
 			entry: resolve(__dirname, 'src/demo.ts'),
 			name: 'PageAgent',
-			fileName: () => `page-agent.demo.js`,
+			fileName: () => `embeding-assistant.js`,
 			formats: ['iife'],
 		},
 		outDir: resolve(__dirname, 'dist', 'iife'),
