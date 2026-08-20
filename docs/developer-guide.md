@@ -50,7 +50,7 @@ If your AI assistant does not support [AGENTS.md](https://agents.md/). Add an al
 
 ### Test With Your Own LLM API
 
-- Create a `.env` file in the repo root with your LLM API config
+- For the website development playground, create a `.env` file in the repo root with your LLM API config
 
     ```env
     LLM_MODEL_NAME=gpt-5.2
@@ -68,7 +68,7 @@ If your AI assistant does not support [AGENTS.md](https://agents.md/). Add an al
 
     > @see https://alibaba.github.io/page-agent/docs/features/models#ollama for configuration
 
-- **Restart the dev server** to load new env vars
+- **Restart the website dev server** to load new env vars
 - If not provided, the demo will use the free testing proxy by default. By using it, you agree to its [terms](./terms-and-privacy.md).
 
 ### Extension Development
@@ -96,7 +96,7 @@ npm run build:ext
 
 - Click the bookmark on any page to load Page-Agent
 
-> Warning: AK in your local `.env` will be inlined in the iife script. Be very careful when you distribute the script.
+> The IIFE demo build deliberately does not read or inline `LLM_*` environment variables. Its build automatically rejects known key markers, internal endpoints, sensitive proxy instructions, and credential-like literals. Configure its public connection values through the script URL. Do not put a model-provider or Gateway key in `apiKey`; use a server-side proxy instead. CI can provide additional comma-separated values with `PUBLIC_IIFE_FORBIDDEN_VALUES`.
 
 ### Adding Documentation
 
