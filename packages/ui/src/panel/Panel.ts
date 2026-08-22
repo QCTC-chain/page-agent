@@ -1,5 +1,6 @@
 import { I18n, type SupportedLanguage } from '../i18n'
 import { truncate } from '../utils'
+import assistantLogoUrl from './assets/assistant-logo.png'
 import { createCard, createReflectionLines } from './cards'
 import type { AgentActivity, PanelAgentAdapter } from './types'
 
@@ -49,6 +50,7 @@ export class Panel {
 	#actionButton: HTMLElement
 	#inputSection: HTMLElement
 	#taskInput: HTMLInputElement
+	#sendButton: HTMLButtonElement
 	#launcher: HTMLElement
 
 	#agent: PanelAgentAdapter
@@ -104,6 +106,7 @@ export class Panel {
 		this.#actionButton = this.#wrapper.querySelector(`.${styles.stopButton}`)!
 		this.#inputSection = this.#wrapper.querySelector(`.${styles.inputSectionWrapper}`)!
 		this.#taskInput = this.#wrapper.querySelector(`.${styles.taskInput}`)!
+		this.#sendButton = this.#wrapper.querySelector(`.${styles.sendButton}`)!
 		this.#launcher = this.#createLauncher()
 		if (config.position === 'bottom-right') {
 			this.#launcher.classList.add(styles.bottomRight)
@@ -136,10 +139,11 @@ export class Panel {
 
 		// Morph action button: running = stop (■), not running = close (X)
 		if (status === 'running') {
-			this.#actionButton.textContent = '■'
+			this.#actionButton.innerHTML = '■'
 			this.#actionButton.title = this.#i18n.t('ui.panel.stop')
 		} else {
-			this.#actionButton.textContent = 'X'
+			this.#actionButton.innerHTML =
+				'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>'
 			this.#actionButton.title = this.#i18n.t('ui.panel.close')
 		}
 
@@ -257,8 +261,8 @@ export class Panel {
 		// Reopening the panel (from the launcher or a running task) hides the launcher again
 		this.#hideLauncher()
 
-		// Drawer variant lays out as a flex column; popover uses block layout
-		this.wrapper.style.display = this.#config.position === 'bottom-right' ? 'flex' : 'block'
+		// Both placements use the same stacked layout for the header, history and composer.
+		this.wrapper.style.display = 'flex'
 		void this.wrapper.offsetHeight
 		this.wrapper.style.opacity = '1'
 		this.wrapper.style.transform =
@@ -360,8 +364,9 @@ export class Panel {
 	 * reusable agent alive. A floating launcher remains for reopening it.
 	 */
 	#close(): void {
-		this.#historySessions = []
-		this.#renderHistory()
+		// Closing starts a fresh UI session so a completed/error status is not
+		// carried into the next conversation.
+		this.reset()
 		this.hide()
 		this.#showLauncher()
 	}
@@ -378,7 +383,7 @@ export class Panel {
 		launcher.title = this.#i18n.t('ui.panel.reopen')
 		launcher.setAttribute('aria-label', this.#i18n.t('ui.panel.reopen'))
 		launcher.setAttribute('data-page-agent-ignore', 'true')
-		launcher.textContent = '🤖'
+		launcher.innerHTML = `<img src="${assistantLogoUrl}" alt="AI助手" />`
 		launcher.classList.add(styles.hidden)
 
 		document.body.appendChild(launcher)
@@ -485,36 +490,40 @@ export class Panel {
 		wrapper.innerHTML = `
 			<div class="${styles.background}"></div>
 			<div class="${styles.historySectionWrapper}">
-				<div class="${styles.historySection}">
-					<div class="${styles.historyItem}">
-						<div class="${styles.historyContent}">
-							<span class="${styles.statusIcon}">🧠</span>
-							<span>${this.#i18n.t('ui.panel.waitingPlaceholder')}</span>
-						</div>
-					</div>
-				</div>
+				<div class="${styles.historySection}"></div>
 			</div>
 			<div class="${styles.header}">
 				<div class="${styles.statusSection}">
+					<img class="${styles.assistantLogo}" src="${assistantLogoUrl}" alt="AI助手" />
 					<div class="${styles.indicator} ${styles.thinking}"></div>
 					<div class="${styles.statusText}">${this.#i18n.t('ui.panel.ready')}</div>
 				</div>
 				<div class="${styles.controls}">
-					<button class="${styles.controlButton} ${styles.expandButton}" title="${this.#i18n.t('ui.panel.expand')}">
-						▼
+					<button type="button" class="${styles.controlButton} ${styles.historyButton}" title="查看执行记录" aria-label="查看执行记录">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg>
 					</button>
-					<button class="${styles.controlButton} ${styles.stopButton}" title="${this.#i18n.t('ui.panel.close')}">
-						X
+					<button type="button" class="${styles.controlButton} ${styles.expandButton}" title="${this.#i18n.t('ui.panel.expand')}" aria-label="${this.#i18n.t('ui.panel.expand')}">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M20 16v4h-4M4 16v4h4"/></svg>
+					</button>
+					<button type="button" class="${styles.controlButton} ${styles.externalButton}" title="聚焦助手" aria-label="聚焦助手">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/></svg>
+					</button>
+					<button type="button" class="${styles.controlButton} ${styles.stopButton}" title="${this.#i18n.t('ui.panel.close')}" aria-label="${this.#i18n.t('ui.panel.close')}">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
 					</button>
 				</div>
 			</div>
 			<div class="${styles.inputSectionWrapper} ${styles.hidden}">
 				<div class="${styles.inputSection}">
-					<input 
+					<input
 						type="text" 
 						class="${styles.taskInput}" 
 						maxlength="${taskInputMaxLength}"
 					/>
+					<div class="${styles.inputHint}">支持连续追问 · Enter 发送</div>
+					<button type="button" class="${styles.sendButton}" title="发送" aria-label="发送">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 16-8-5 16-3-6-8-2Z"/><path d="m12 14 4-4"/></svg>
+					</button>
 				</div>
 			</div>
 		`
@@ -540,6 +549,18 @@ export class Panel {
 			this.#toggle()
 		})
 
+		this.wrapper.querySelector(`.${styles.historyButton}`)?.addEventListener('click', (e) => {
+			e.stopPropagation()
+			this.#expand()
+			this.#scrollToBottom()
+		})
+
+		this.wrapper.querySelector(`.${styles.externalButton}`)?.addEventListener('click', (e) => {
+			e.stopPropagation()
+			this.#expand()
+			this.#taskInput.focus()
+		})
+
 		// Action button (stop / close)
 		this.#actionButton.addEventListener('click', (e) => {
 			e.stopPropagation()
@@ -560,6 +581,11 @@ export class Panel {
 				e.preventDefault()
 				this.#submitTask()
 			}
+		})
+
+		this.#sendButton.addEventListener('click', (e) => {
+			e.stopPropagation()
+			this.#submitTask()
 		})
 
 		// Prevent input area click event bubbling
@@ -719,9 +745,7 @@ export class Panel {
 			}
 		}
 
-		this.#historySection.innerHTML =
-			items.join('') ||
-			`<div class="${styles.historyItem}"><div class="${styles.historyContent}"><span class="${styles.statusIcon}">🧠</span><span>${this.#i18n.t('ui.panel.waitingPlaceholder')}</span></div></div>`
+		this.#historySection.innerHTML = items.join('')
 		this.#scrollToBottom()
 	}
 

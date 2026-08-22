@@ -54,6 +54,13 @@ describe('Panel close / reopen', () => {
 		vi.restoreAllMocks()
 	})
 
+	it('starts with an empty history instead of a waiting placeholder', () => {
+		createPanel()
+		const wrapper = document.getElementById(PANEL_ID)!
+
+		expect(wrapper.textContent).not.toContain('Waiting for task to start...')
+	})
+
 	it('hides the panel and shows a launcher instead of disposing the agent when closed while idle', () => {
 		const { agent } = createPanel()
 		const wrapper = document.getElementById(PANEL_ID)!
@@ -134,6 +141,19 @@ describe('Panel close / reopen', () => {
 
 		expect(wrapper.textContent).not.toContain('completed task')
 		expect(wrapper.textContent).not.toContain('completed result')
+	})
+
+	it('resets the header to ready after closing and reopening a completed task', () => {
+		createPanel()
+		const wrapper = document.getElementById(PANEL_ID)!
+		const launcher = document.getElementById(LAUNCHER_ID)!
+		const statusText = wrapper.querySelector(`.${styles.statusText}`)!
+
+		statusText.textContent = 'Task completed'
+		wrapper.querySelector<HTMLButtonElement>('button[title="Close"]')!.click()
+		launcher.click()
+
+		expect(statusText.textContent).toBe('Ready')
 	})
 
 	it('opens the expanded conversation panel when the launcher is clicked', () => {
