@@ -72,6 +72,13 @@ export function initPageController() {
 		const pc = getPC() as any
 
 		switch (action) {
+			case 'get_page_readiness':
+				// Handled without PageController: a cheap scan is enough for the
+				// tab-wait loop, and building the full flat tree here would be wasted
+				// work (getBrowserState does it right after).
+				sendResponse(getPageReadiness())
+				break
+
 			case 'get_last_update_time':
 			case 'get_browser_state':
 			case 'update_tree':
@@ -131,5 +138,26 @@ function getMethodName(action: string): string {
 
 		default:
 			return action
+	}
+}
+
+/**
+ * Cheap readiness probe used while a freshly opened tab settles.
+ *
+ * Deliberately does NOT build the full flat DOM tree (expensive, and
+ * `getBrowserState` does that right after the wait): a quick selector scan is
+ * enough to tell "the SPA mounted something interactive" from "still blank",
+ * which is all the tab-wait loop needs.
+ *
+ * @returns { ready: true when the document is parsed AND at least one interactive
+ * element is present; interactiveCount: how many were found }
+ */
+function getPageReadiness(): { ready: boolean; interactiveCount: number } {
+	const interactiveCount = document.querySelectorAll(
+		'button, a[href], input, select, textarea, [role="button"], [role="link"], [contenteditable="true"]'
+	).length
+	return {
+		ready: document.readyState === 'complete' && interactiveCount > 0,
+		interactiveCount,
 	}
 }

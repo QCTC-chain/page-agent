@@ -78,6 +78,10 @@ export class RemotePageController {
 			})
 		}
 
+		// Attach the tab identity so PageAgentCore can distinguish a tab switch from
+		// an in-tab URL navigation (see BrowserState.tabId).
+		browserState.tabId = this.currentTabId ?? undefined
+
 		const sum = await this.tabsController.summarizeTabs()
 		browserState.header = sum + '\n\n' + (browserState.header || '')
 

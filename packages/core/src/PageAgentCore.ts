@@ -96,13 +96,24 @@ export class PageAgentCore extends EventTarget {
 	#lastResult: ExecutionResult | null = null
 
 	/** internal states during a single task execution */
-	#states = {
+	#states: {
 		/** Accumulated wait time in seconds */
-		totalWaitTime: 0,
-		/** For detecting navigation */
-		lastURL: '',
+		totalWaitTime: number
+		/** For detecting in-tab URL navigation */
+		lastURL: string
+		/**
+		 * Last observed page context id (e.g. browser tab id in extension mode).
+		 * Undefined in single-document embed mode. Used to tell a tab switch apart
+		 * from a URL navigation within the same tab.
+		 */
+		lastTabId: number | undefined
 		/** Browser state */
-		browserState: null as BrowserState | null,
+		browserState: BrowserState | null
+	} = {
+		totalWaitTime: 0,
+		lastURL: '',
+		lastTabId: undefined,
+		browserState: null,
 	}
 
 	constructor(config: PageAgentCoreConfig) {
@@ -218,7 +229,7 @@ export class PageAgentCore extends EventTarget {
 
 		this.history = []
 		this.#observations = []
-		this.#states = { totalWaitTime: 0, lastURL: '', browserState: null }
+		this.#states = { totalWaitTime: 0, lastURL: '', lastTabId: undefined, browserState: null }
 		this.#abortController = new AbortController()
 		const signal = this.#abortController.signal
 
@@ -390,7 +401,14 @@ export class PageAgentCore extends EventTarget {
 			return z.object({ [toolName]: tool.inputSchema }).describe(tool.description)
 		})
 
-		const actionSchema = z.union(actionSchemas as unknown as [z.ZodType, z.ZodType, ...z.ZodType[]])
+		const actionSchema = z.union(
+			// SAFETY: `this.tools` is always non-empty — the built-in `done` tool is
+			// registered at module init, so `actionSchemas` has at least one element and
+			// a union of an empty tuple can never be constructed here. The double cast
+			// is required because Array.from yields `ZodType[]`, which zod's `z.union`
+			// does not accept (it needs a non-empty tuple type).
+			actionSchemas as unknown as [z.ZodType, z.ZodType, ...z.ZodType[]]
+		)
 
 		const macroToolSchema = z.object({
 			// thinking: z.string().optional(),
@@ -544,13 +562,30 @@ export class PageAgentCore extends EventTarget {
 			)
 		}
 
-		// Detect URL change
-		const currentURL = this.#states.browserState?.url || ''
-		if (currentURL !== this.#states.lastURL) {
+		// Detect page context change: a tab switch (extension/multi-tab mode) or an
+		// in-tab URL navigation. Tab switches get their own observation so the model
+		// does not misread them as navigation (and can anchor where it came from).
+		const browserState = this.#states.browserState
+		const currentURL = browserState?.url || ''
+		const currentTabId = browserState?.tabId
+		const tabSwitched =
+			currentTabId !== undefined &&
+			this.#states.lastTabId !== undefined &&
+			currentTabId !== this.#states.lastTabId
+
+		if (tabSwitched) {
+			this.pushObservation(
+				`Switched to tab ${currentTabId} (from tab ${this.#states.lastTabId}): ` +
+					`[${browserState?.title ?? ''}](${currentURL})`
+			)
+			await waitFor(0.5) // wait for the newly visible tab to stabilize
+		} else if (currentURL !== this.#states.lastURL) {
 			this.pushObservation(`Page navigated to → ${currentURL}`)
-			this.#states.lastURL = currentURL
 			await waitFor(0.5) // wait for page to stabilize
 		}
+
+		this.#states.lastTabId = currentTabId
+		this.#states.lastURL = currentURL
 
 		// Remaining steps warning
 		const remaining = this.config.maxSteps - step

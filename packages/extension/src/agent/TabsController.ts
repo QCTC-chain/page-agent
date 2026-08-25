@@ -2,13 +2,27 @@ import { isContentScriptAllowed } from './RemotePageController'
 
 const PREFIX = '[TabsController]'
 
+/**
+ * How long `waitUntilTabLoaded` keeps polling a freshly loaded tab for SPA
+ * readiness (content script reports interactive elements) before giving up.
+ * Best-effort by design: on timeout the agent proceeds and observes whatever
+ * is there, and the model can still use the `wait` tool itself.
+ */
+const TAB_READINESS_POLL_TIMEOUT_MS = 8_000
+
 const debug = console.debug.bind(console, `\x1b[90m${PREFIX}\x1b[0m`)
 
-function sendMessage(message: {
-	type: 'TAB_CONTROL'
-	action: TabAction
-	payload?: any
-}): Promise<any> {
+/**
+ * Messages the TabsController sends to the background service worker.
+ * Tab control messages go to the background's chrome.tabs API; the
+ * page-readiness probe is routed through the PAGE_CONTROL proxy to a specific
+ * tab's content script.
+ */
+type TabsControllerMessage =
+	| { type: 'TAB_CONTROL'; action: TabAction; payload?: any }
+	| { type: 'PAGE_CONTROL'; action: 'get_page_readiness'; targetTabId: number }
+
+function sendMessage(message: TabsControllerMessage): Promise<any> {
 	return chrome.runtime.sendMessage(message).catch((error) => {
 		console.error(PREFIX, message.action, error)
 		return null
@@ -293,7 +307,10 @@ export class TabsController {
 		return summaries.join('\n')
 	}
 
-	async waitUntilTabLoaded(tabId: number, options: { signal?: AbortSignal } = {}): Promise<void> {
+	async waitUntilTabLoaded(
+		tabId: number,
+		options: { signal?: AbortSignal; readinessTimeoutMs?: number } = {}
+	): Promise<void> {
 		const tab = this.tabs.find((t) => t.id === tabId)
 		if (!tab) throw new Error(`Tab ID ${tabId} not found in tab list.`)
 		if (tab.status === 'complete') return
@@ -316,6 +333,50 @@ export class TabsController {
 
 		const latest = this.tabs.find((t) => t.id === tabId)
 		if (latest?.status === 'unloaded') throw new Error(`Tab ID ${tabId} is unloaded.`)
+
+		// SPA render handshake: tab.status 'complete' only means the document
+		// loaded, not that the app rendered. Wait (best-effort) until the content
+		// script reports interactive elements, so the agent does not observe a
+		// blank mounting page and waste a step.
+		await this.waitForTabInteractive(tabId, options)
+	}
+
+	/**
+	 * Best-effort SPA readiness wait after a tab finishes loading.
+	 *
+	 * Polls the tab's content script (`get_page_readiness` — a cheap DOM scan,
+	 * not a full tree build) until it reports interactive elements. Never blocks
+	 * the agent indefinitely: pages that cannot run content scripts and timeout
+	 * cases simply proceed, letting the model observe and wait for itself.
+	 */
+	private async waitForTabInteractive(
+		tabId: number,
+		options: { signal?: AbortSignal; readinessTimeoutMs?: number } = {}
+	): Promise<void> {
+		const tab = this.tabs.find((t) => t.id === tabId)
+		if (!tab) return
+		if (!isContentScriptAllowed(tab.url)) return
+
+		const timeoutMs = options.readinessTimeoutMs ?? TAB_READINESS_POLL_TIMEOUT_MS
+
+		await waitUntil(
+			async () => {
+				try {
+					const readiness = await sendMessage({
+						type: 'PAGE_CONTROL',
+						action: 'get_page_readiness',
+						targetTabId: tabId,
+					})
+					return readiness?.ready === true
+				} catch {
+					// No content script in this tab (yet) — keep polling until timeout.
+					return false
+				}
+			},
+			timeoutMs,
+			false, // never throw on timeout — best-effort by design
+			options.signal
+		)
 	}
 
 	/**

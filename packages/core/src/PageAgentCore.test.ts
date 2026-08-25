@@ -337,6 +337,97 @@ describe.concurrent('PageAgentCore lifecycle', () => {
 			expect(result).toContain('Hovered')
 		})
 	})
+	describe('page context observations', () => {
+		it('reports a tab switch with a dedicated observation (not "Page navigated to")', async () => {
+			const state: BrowserState = {
+				url: 'https://app-a.test/orders',
+				title: 'App A',
+				header: '',
+				content: '',
+				footer: '',
+				tabId: 1,
+			}
+			const pageController = createPageController()
+			const mockGetBrowserState = vi.fn(async () => state)
+			;(
+				pageController as unknown as { getBrowserState: typeof mockGetBrowserState }
+			).getBrowserState = mockGetBrowserState
+
+			const fetchMock = createFetchMock()
+				.mockResolvedValueOnce(waitResponse())
+				.mockResolvedValueOnce(doneResponse('all done'))
+			const agent = createAgent(fetchMock, {
+				pageController,
+				customTools: {
+					// Simulate switching to another tab while the task runs.
+					wait: tool({
+						description: 'instant wait for tests',
+						inputSchema: z.object({ seconds: z.number() }),
+						execute: async () => {
+							state.url = 'https://app-b.test/'
+							state.title = 'App B'
+							state.tabId = 2
+							return '✅ Waited.'
+						},
+					}),
+				},
+			})
+
+			const result = await agent.execute('switch to app b')
+
+			expect(result.success).toBe(true)
+			const observations = agent.history
+				.filter((e) => e.type === 'observation')
+				.map((e) => e.content)
+			const switchObservations = observations.filter((o) => o.includes('Switched to tab 2'))
+			expect(switchObservations).toHaveLength(1)
+			expect(switchObservations[0]).toContain('from tab 1')
+			// Only the initial step-1 URL observation may mention "navigated to"; the
+			// switch itself must NOT be reported as a navigation.
+			expect(observations.filter((o) => o.includes('Page navigated to'))).toHaveLength(1)
+		})
+
+		it('falls back to URL-only detection when tabId is absent (embed mode)', async () => {
+			const state: BrowserState = {
+				url: 'https://example.test/a',
+				title: 'Test page',
+				header: '',
+				content: '',
+				footer: '',
+			}
+			const pageController = createPageController()
+			const mockGetBrowserState = vi.fn(async () => state)
+			;(
+				pageController as unknown as { getBrowserState: typeof mockGetBrowserState }
+			).getBrowserState = mockGetBrowserState
+
+			const fetchMock = createFetchMock()
+				.mockResolvedValueOnce(waitResponse())
+				.mockResolvedValueOnce(doneResponse('all done'))
+			const agent = createAgent(fetchMock, {
+				pageController,
+				customTools: {
+					// Navigate to another URL within the same (tab-less) page.
+					wait: tool({
+						description: 'instant wait for tests',
+						inputSchema: z.object({ seconds: z.number() }),
+						execute: async () => {
+							state.url = 'https://example.test/b'
+							return '✅ Waited.'
+						},
+					}),
+				},
+			})
+
+			await agent.execute('navigate')
+
+			const observations = agent.history
+				.filter((e) => e.type === 'observation')
+				.map((e) => e.content)
+			expect(observations.filter((o) => o.includes('Page navigated to'))).toHaveLength(2)
+			expect(observations.some((o) => o.includes('Switched to tab'))).toBe(false)
+		})
+	})
 	describe('cancellation edge cases', () => {
 		it('rejects a new task while a stop is still settling', async () => {
 			const fetchMock = createFetchMock().mockResolvedValueOnce(waitResponse())

@@ -41,6 +41,13 @@ export interface BrowserState {
 	content: string
 	/** Page footer hint (e.g. "... 300 pixels below ..." or "[End of page]") */
 	footer: string
+	/**
+	 * Stable identifier of the current page context (e.g. a browser tab id in
+	 * extension/multi-tab mode). When present, PageAgentCore distinguishes a tab
+	 * switch from an in-tab URL navigation. Optional for backwards
+	 * compatibility: single-document embed mode omits it.
+	 */
+	tabId?: number
 }
 
 interface ActionResult {
