@@ -9,6 +9,7 @@
 import {
 	clickElement,
 	getElementByIndex,
+	hoverElement,
 	inputTextElement,
 	scrollHorizontally,
 	scrollVertically,
@@ -264,6 +265,30 @@ export class PageController extends EventTarget {
 			return {
 				success: false,
 				message: `❌ Failed to click element: ${error}`,
+			}
+		}
+	}
+
+	/**
+	 * Hover element by index.
+	 * Dispatches the hover event sequence without clicking and waits for any
+	 * revealed popup/menu to settle, so the next page observation shows it.
+	 */
+	async hoverElement(index: number): Promise<ActionResult> {
+		try {
+			this.assertIndexed()
+			const element = getElementByIndex(this.selectorMap, index)
+			const elemText = this.elementTextMap.get(index)
+			await hoverElement(element)
+
+			return {
+				success: true,
+				message: `✅ Hovered element (${elemText ?? index}). Any revealed menu/popup will show up in the next page state.`,
+			}
+		} catch (error) {
+			return {
+				success: false,
+				message: `❌ Failed to hover element: ${error}`,
 			}
 		}
 	}

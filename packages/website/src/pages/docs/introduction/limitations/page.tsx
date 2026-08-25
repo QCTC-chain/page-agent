@@ -95,6 +95,9 @@ export default function LimitationsPage() {
 							<ul className="space-y-1.5 text-sm">
 								{[
 									isZh ? '点击、文本输入、选择' : 'Click, text input, select',
+									isZh
+										? '悬停（展开 JS 触发的菜单/浮层）'
+										: 'Hover (reveal JS-triggered menus & popovers)',
 									isZh ? '页面滚动（垂直 / 水平）' : 'Scroll (vertical / horizontal)',
 									isZh ? '表单提交、焦点切换' : 'Form submit, focus',
 									isZh ? '同源 iframe（仅单层）' : 'Same-origin iframe (single level only)',
@@ -113,7 +116,10 @@ export default function LimitationsPage() {
 							</h3>
 							<ul className="space-y-1.5 text-sm">
 								{[
-									isZh ? '悬停、拖拽、右键菜单' : 'Hover, drag & drop, right-click',
+									isZh ? '拖拽、右键菜单' : 'Drag & drop, right-click',
+									isZh
+										? '纯 CSS :hover 菜单（需真实指针）'
+										: 'Pure CSS :hover menus (require a real pointer)',
 									isZh ? '键盘快捷键' : 'Keyboard shortcuts',
 									isZh ? '坐标定位操作' : 'Position-based control',
 									isZh ? '嵌套 iframe、跨域 iframe' : 'Nested iframes, cross-origin iframes',

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Features
+
+- **Hover support** - Added a `hover_element_by_index` action/tool that dispatches the hover event sequence (pointer/mouse move, over, enter) without clicking, revealing JS-triggered menus, flyout submenus, popovers and tooltips (e.g. sidebar items that expand a submenu on hover). The agent prompt now prefers hovering over clicking for such elements, falling back to a click when nothing appears.
+
+### Limitations
+
+- Synthetic hover events do not trigger pure CSS `:hover` menus, which require a real pointer (e.g. CDP input) and remain unsupported.
+
 ## [1.12.0] - 2026-07-09
 
 - **Stateless extension tab sync** - TabsController pulls tab state on demand instead of long-lived ports, so the MV3 service worker stays stateless and survives idle kills without stalling the side panel.

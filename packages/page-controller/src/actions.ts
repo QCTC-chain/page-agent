@@ -125,6 +125,60 @@ export async function clickElement(element: HTMLElement) {
 	await waitFor(0.2)
 }
 
+/** Wait after hovering for the revealed popup/menu open animation to settle. */
+const HOVER_SETTLE_DELAY_SECONDS = 0.5
+
+/**
+ * Simulate hovering over an element: moves the pointer onto the element and
+ * dispatches the pointer/mouse hover event sequence
+ * (pointermove → pointerover/enter → mouseover/enter) WITHOUT clicking.
+ *
+ * Useful for revealing hover-triggered menus, flyout submenus, popovers and
+ * tooltips (e.g. a sidebar item that expands a submenu on mouse hover). The
+ * caller is expected to re-observe the page afterwards so the newly revealed
+ * elements appear in the next browser state.
+ *
+ * @note Synthetic events trigger JS listeners (React onMouseEnter, native
+ *       mouseenter/mouseover, etc.) but NOT CSS `:hover` styling — pure-CSS
+ *       hover menus require a real pointer (e.g. CDP input) and stay out of
+ *       reach here.
+ * @private Internal method, subject to change at any time.
+ */
+export async function hoverElement(element: HTMLElement) {
+	await scrollIntoViewIfNeeded(element)
+	const frame = element.ownerDocument.defaultView?.frameElement
+	if (frame) await scrollIntoViewIfNeeded(frame)
+
+	const rect = element.getBoundingClientRect()
+	const x = rect.left + rect.width / 2
+	const y = rect.top + rect.height / 2
+
+	await movePointerToElement(element, x, y)
+
+	const pointerOpts = {
+		bubbles: true,
+		cancelable: true,
+		clientX: x,
+		clientY: y,
+		pointerType: 'mouse',
+	}
+	const mouseOpts = { bubbles: true, cancelable: true, clientX: x, clientY: y }
+
+	// Move onto the element — pointer events first, then mouse events (spec order)
+	element.dispatchEvent(new PointerEvent('pointermove', pointerOpts))
+	element.dispatchEvent(new MouseEvent('mousemove', mouseOpts))
+
+	// Hover — pointer events first, then mouse events (spec order)
+	element.dispatchEvent(new PointerEvent('pointerover', pointerOpts))
+	element.dispatchEvent(new PointerEvent('pointerenter', { ...pointerOpts, bubbles: false }))
+	element.dispatchEvent(new MouseEvent('mouseover', mouseOpts))
+	element.dispatchEvent(new MouseEvent('mouseenter', { ...mouseOpts, bubbles: false }))
+
+	// Wait for the revealed popup/menu to finish its open animation so the next
+	// DOM extraction captures it completely (opacity/transform transitions).
+	await waitFor(HOVER_SETTLE_DELAY_SECONDS)
+}
+
 /**
  * @private Internal method, subject to change at any time.
  */

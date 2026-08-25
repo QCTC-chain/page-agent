@@ -310,6 +310,33 @@ describe.concurrent('PageAgentCore lifecycle', () => {
 		})
 	})
 
+	describe('built-in tools', () => {
+		it('registers the hover_element_by_index tool', () => {
+			const agent = createAgent(createFetchMock())
+			expect(agent.tools.has('hover_element_by_index')).toBe(true)
+		})
+
+		it('hover_element_by_index delegates to pageController.hoverElement', async () => {
+			const pageController = createPageController()
+			const hoverElement = vi.fn(async () => ({
+				success: true,
+				message: '✅ Hovered element (Users).',
+			}))
+			;(pageController as unknown as { hoverElement: typeof hoverElement }).hoverElement =
+				hoverElement
+
+			const agent = createAgent(createFetchMock(), { pageController })
+			const tool = agent.tools.get('hover_element_by_index')!
+			const result = await tool.execute.call(
+				agent,
+				{ index: 3 },
+				{ signal: new AbortController().signal }
+			)
+
+			expect(hoverElement).toHaveBeenCalledWith(3)
+			expect(result).toContain('Hovered')
+		})
+	})
 	describe('cancellation edge cases', () => {
 		it('rejects a new task while a stop is still settling', async () => {
 			const fetchMock = createFetchMock().mockResolvedValueOnce(waitResponse())

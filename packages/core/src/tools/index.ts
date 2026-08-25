@@ -105,6 +105,24 @@ tools.set(
 )
 
 tools.set(
+	'hover_element_by_index',
+	tool({
+		description:
+			'Hover over an element by index WITHOUT clicking. Use this to reveal hover-triggered menus, ' +
+			'flyout submenus, popovers or tooltips (e.g. a sidebar item that expands a submenu on mouse hover). ' +
+			'After hovering, inspect the newly appeared elements in the next step. ' +
+			'If nothing appears after hovering, click the element to expand it as a fallback.',
+		inputSchema: z.object({
+			index: z.int().min(0),
+		}),
+		execute: async function (this: PageAgentCore, input) {
+			const result = await this.pageController.hoverElement(input.index)
+			return result.message
+		},
+	})
+)
+
+tools.set(
 	'input_text',
 	tool({
 		description: 'Click and type text into an interactive input element',
