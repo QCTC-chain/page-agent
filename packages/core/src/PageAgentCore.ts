@@ -3,12 +3,13 @@
  * Copyright (C) 2026 SimonLuvRamen
  * All rights reserved.
  */
-import { InvokeError, LLM, type Tool } from '@page-agent/llms'
+import { type InvokeError, LLM, MigrationError, type Tool } from '@page-agent/llms'
 import type { BrowserState, PageController } from '@page-agent/page-controller'
 import chalk from 'chalk'
 import * as z from 'zod/v4'
 
 import SYSTEM_PROMPT from './prompts/system_prompt.md?raw'
+import MULTIPAGE_SYSTEM_PROMPT from './prompts/system_prompt_multipage.md?raw'
 import { tools } from './tools'
 import type {
 	AgentActivity,
@@ -24,6 +25,13 @@ import type {
 import { assert, fetchLlmsTxt, normalizeResponse, suppress, uid, waitFor } from './utils'
 
 export { tool, type PageAgentTool, type ToolContext } from './tools'
+export {
+	serializeAgentState,
+	restoreAgentState,
+	parseAgentSnapshot,
+	type AgentSnapshot,
+} from './state'
+export { MigrationError } from '@page-agent/llms'
 export type * from './types'
 
 export type PageAgentCoreConfig = AgentConfig & { pageController: PageController }
@@ -218,16 +226,30 @@ export class PageAgentCore extends EventTarget {
 	 * external errors (pre-checks/config/hooks) will threw;
 	 * agent errors will be caught and added to history, and return a failed result
 	 */
-	async execute(task: string): Promise<ExecutionResult> {
+	/**
+	 * Execute a task. When `options.initialHistory` is provided the agent resumes
+	 * from a previously serialized state (see `serializeAgentState`) instead of
+	 * starting a fresh conversation — used by multi-page continuity to continue
+	 * a task in another page/tab.
+	 *
+	 * @param task - The task description (always the source of truth).
+	 * @param options - Optional resume payload: `initialHistory` seeds the agent
+	 *   memory and the step counter, `initialTaskId` keeps the audit/session id
+	 *   stable across the migration.
+	 */
+	async execute(
+		task: string,
+		options: { initialHistory?: HistoricalEvent[]; initialTaskId?: string } = {}
+	): Promise<ExecutionResult> {
 		// pre-checks
 		if (this.disposed) throw new Error('PageAgent has been disposed. Create a new instance.')
 		if (this.#status === 'running') throw new Error('A task is already running.')
 		if (!task) throw new Error('Task is required')
 
 		this.task = task
-		this.taskId = uid()
+		this.taskId = options.initialTaskId || uid()
 
-		this.history = []
+		this.history = options.initialHistory ? [...options.initialHistory] : []
 		this.#observations = []
 		this.#states = { totalWaitTime: 0, lastURL: '', lastTabId: undefined, browserState: null }
 		this.#abortController = new AbortController()
@@ -249,7 +271,7 @@ export class PageAgentCore extends EventTarget {
 		const stepDelay = this.config.stepDelay ?? 0.4
 		const maxSteps = this.config.maxSteps
 
-		let step = 0
+		let step = this.history.filter((e) => e.type === 'step').length
 		let taskResult: ExecutionResult
 		let finalStatus: AgentStatus = 'error'
 
@@ -338,13 +360,18 @@ export class PageAgentCore extends EventTarget {
 					// catch block must not throw error. otherwise the error may be overridden if finally block also throws error.
 
 					const isAbortError = (error as any)?.name === 'AbortError'
-					if (!isAbortError) console.error('Task failed', error)
+					const isMigration = error instanceof MigrationError
+					if (!isAbortError && !isMigration) console.error('Task failed', error)
 					const message = isAbortError ? 'Task aborted' : String(error)
-					this.#emitActivity({ type: 'error', message: message })
-					this.#emitHistoryChange({ type: 'error', message: message, rawResponse: error })
+					if (!isMigration) {
+						this.#emitActivity({ type: 'error', message: message })
+						this.#emitHistoryChange({ type: 'error', message: message, rawResponse: error })
+					}
+					// On migration no history event is recorded: the old tab's history stays
+					// clean so it can be reclaimed and resumed without a stray "migrated" note.
 					taskResult = { success: false, data: message, history: this.history }
 					this.#lastResult = taskResult
-					finalStatus = isAbortError ? 'stopped' : 'error'
+					finalStatus = isAbortError ? 'stopped' : isMigration ? 'migrated' : 'error'
 					break
 				} finally {
 					// finally block runs before the break above.
@@ -473,7 +500,8 @@ export class PageAgentCore extends EventTarget {
 
 				// counting wait time
 				if (toolName === 'wait') {
-					this.#states.totalWaitTime += toolInput?.seconds || 0
+					const waitInput = action[toolName] as { seconds?: number } | undefined
+					this.#states.totalWaitTime += waitInput?.seconds || 0
 				} else {
 					this.#states.totalWaitTime = 0
 				}
@@ -496,7 +524,8 @@ export class PageAgentCore extends EventTarget {
 		}
 
 		const targetLanguage = this.config.language === 'zh-CN' ? '中文' : 'English'
-		const systemPrompt = SYSTEM_PROMPT.replace(
+		const promptTemplate = this.config.multiPage ? MULTIPAGE_SYSTEM_PROMPT : SYSTEM_PROMPT
+		const systemPrompt = promptTemplate.replace(
 			/Default working language: \*\*.*?\*\*/,
 			`Default working language: **${targetLanguage}**`
 		)

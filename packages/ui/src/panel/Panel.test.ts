@@ -1,7 +1,8 @@
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Panel } from './Panel'
-import type { PanelAgentAdapter } from './types'
+import type { PanelAgentAdapter, PanelHandoff } from './types'
 
 import styles from './Panel.module.css'
 
@@ -189,6 +190,100 @@ describe('Panel close / reopen', () => {
 
 		expect(document.getElementById(PANEL_ID)).toBeNull()
 		expect(document.getElementById(LAUNCHER_ID)).toBeNull()
+	})
+})
+
+describe('Panel handoff cards (multi-page)', () => {
+	const panels: Panel[] = []
+
+	function createHandoffPanel(handoff: PanelHandoff): { agent: FakeAgent; panel: Panel } {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panel.show()
+		;(agent as unknown as { handoff: PanelHandoff | undefined }).handoff = handoff
+		agent.dispatchEvent(new Event('handoffchange'))
+		panels.push(panel)
+		return { agent, panel }
+	}
+
+	afterEach(() => {
+		panels.splice(0).forEach((panel) => panel.dispose())
+		document.body.innerHTML = ''
+		vi.restoreAllMocks()
+	})
+
+	it('renders a clickable awaiting-navigation card with cancel', () => {
+		const cancel = vi.fn()
+		const { panel } = createHandoffPanel({
+			kind: 'awaiting',
+			url: 'https://example.test/next?pa_handoff=task-1:nonce',
+			cancelAwaitingNavigation: cancel,
+		})
+		const wrapper = document.getElementById(PANEL_ID)!
+		const link = wrapper.querySelector<HTMLAnchorElement>('a[href^="https://example.test/next"]')!
+		const cancelButton = Array.from(wrapper.querySelectorAll<HTMLButtonElement>('button')).find(
+			(b) => b.textContent === 'Cancel'
+		)!
+
+		expect(link).not.toBeNull()
+		expect(link.target).toBe('_blank')
+		cancelButton.click()
+		expect(cancel).toHaveBeenCalledTimes(1)
+		void panel
+	})
+
+	it('renders a resume card and triggers resume on click', () => {
+		const resume = vi.fn()
+		createHandoffPanel({ kind: 'resume', task: 'find the order', resume })
+		const wrapper = document.getElementById(PANEL_ID)!
+
+		const resumeButton = Array.from(wrapper.querySelectorAll<HTMLButtonElement>('button')).find(
+			(b) => b.textContent === 'Continue task'
+		)!
+
+		expect(wrapper.textContent).toContain('find the order')
+		resumeButton.click()
+		expect(resume).toHaveBeenCalledTimes(1)
+	})
+
+	it('renders a reclaim card and triggers reclaim on click', () => {
+		const reclaim = vi.fn()
+		createHandoffPanel({ kind: 'reclaimable', reclaim })
+		const wrapper = document.getElementById(PANEL_ID)!
+
+		const reclaimButton = Array.from(wrapper.querySelectorAll<HTMLButtonElement>('button')).find(
+			(b) => b.textContent === 'Continue here'
+		)!
+
+		reclaimButton.click()
+		expect(reclaim).toHaveBeenCalledTimes(1)
+	})
+
+	it('hides the handoff section when handoff is null', () => {
+		const { panel } = createHandoffPanel({ kind: null })
+		const section = panel.wrapper.querySelector(`.${styles.handoffSection}`)!
+
+		expect(section.classList.contains(styles.hidden)).toBe(true)
+	})
+
+	it('auto-opens the panel when a handoff card appears (e.g. new-tab resume)', () => {
+		// The panel starts hidden (launcher state) on a freshly loaded tab; a
+		// handoff card must bring it up automatically so the user sees it.
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		const wrapper = document.getElementById(PANEL_ID)!
+		expect(wrapper.style.display).toBe('none') // starts hidden
+
+		;(agent as unknown as { handoff: PanelHandoff | undefined }).handoff = {
+			kind: 'resume',
+			task: 'find the order',
+			resume: () => {},
+		}
+		agent.dispatchEvent(new Event('handoffchange'))
+
+		expect(wrapper.style.display).not.toBe('none')
+		expect(wrapper.classList.contains(styles.expanded)).toBe(true)
+		panels.push(panel)
 	})
 })
 

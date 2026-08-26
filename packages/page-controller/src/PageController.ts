@@ -254,15 +254,24 @@ export class PageController extends EventTarget {
 			this.assertIndexed()
 			const element = getElementByIndex(this.selectorMap, index)
 			const elemText = this.elementTextMap.get(index)
-			await clickElement(element)
 
-			// Handle links that open in new tabs
+			// A synthetic click on a target=_blank link is a navigation to a new
+			// tab WITHOUT a user gesture — browsers block it (popup blocker) and
+			// the new tab never opens. Report it as a failure and tell the model
+			// to use the `open_new_tab` tool instead, so multi-page handoff can
+			// actually take over.
 			if (isAnchorElement(element) && element.target === '_blank') {
 				return {
-					success: true,
-					message: `✅ Clicked element (${elemText ?? index}). ⚠️ Link opened in a new tab.`,
+					success: false,
+					message:
+						`❌ Element (${elemText ?? index}) is a link that opens in a new tab ` +
+						`(target="_blank"). A programmatic click is blocked by the browser ` +
+						`popup blocker. Use the open_new_tab tool with the link's href ` +
+						`(${element.getAttribute('href') ?? 'unknown'}) to continue on that page.`,
 				}
 			}
+
+			await clickElement(element)
 
 			return {
 				success: true,
@@ -360,7 +369,7 @@ export class PageController extends EventTarget {
 
 			const scrollAmount = (pixels ?? numPages * window.innerHeight) * (down ? 1 : -1)
 
-			const element = index !== undefined ? getElementByIndex(this.selectorMap, index) : null
+			const element = index === undefined ? null : getElementByIndex(this.selectorMap, index)
 
 			const message = await scrollVertically(scrollAmount, element)
 
@@ -391,7 +400,7 @@ export class PageController extends EventTarget {
 
 			const scrollAmount = pixels * (right ? 1 : -1)
 
-			const element = index !== undefined ? getElementByIndex(this.selectorMap, index) : null
+			const element = index === undefined ? null : getElementByIndex(this.selectorMap, index)
 
 			const message = await scrollHorizontally(scrollAmount, element)
 

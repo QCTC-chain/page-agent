@@ -1,5 +1,5 @@
 import domTree from './dom_tree/index.js'
-import {
+import type {
 	ElementDomNode,
 	FlatDomTree,
 	InteractiveElementDomNode,
@@ -164,7 +164,14 @@ interface TreeNode {
 	isTopElement?: boolean
 	isNew?: boolean
 	highlightIndex?: number
-	extra?: Record<string, any>
+	/** Optional per-element extra data attached during extraction (e.g. scroll info). */
+	extra?: DomNodeExtra
+}
+
+/** Extra per-element data collected during DOM extraction (scroll metrics etc.). */
+interface DomNodeExtra {
+	scrollable?: boolean
+	scrollData?: { left?: number; top?: number; right?: number; bottom?: number }
 }
 
 /**
@@ -216,6 +223,10 @@ export function flatTreeToString(
 
 		// for jump check
 		'target',
+
+		// @edit added for multi-page handoff: the model needs the link target
+		// URL to call `open_new_tab(url)` for target=_blank links.
+		'href',
 
 		// absolute position dropdown menu
 		'aria-haspopup',
@@ -369,7 +380,11 @@ export function flatTreeToString(
 
 					if (Object.keys(attributesToInclude).length > 0) {
 						attributesHtmlStr = Object.entries(attributesToInclude)
-							.map(([key, value]) => `${key}=${capTextLength(value, 20)}`)
+							.map(([key, value]) =>
+								// href must stay intact: the model needs the full URL to call
+								// `open_new_tab(url)` for target=_blank links (multi-page handoff).
+								key === 'href' ? `${key}=${value}` : `${key}=${capTextLength(value, 20)}`
+							)
 							.join(' ')
 					}
 				}

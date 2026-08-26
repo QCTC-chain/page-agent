@@ -3,6 +3,66 @@ import { describe, expect, it } from 'vitest'
 import { PageController } from './PageController'
 import { hoverElement } from './actions'
 
+/**
+ * happy-dom has no layout engine: offsetWidth/Height are 0 and
+ * elementFromPoint always returns null, so the DOM walker treats every element
+ * as invisible/non-top. Patch the layout primitives it relies on, then restore
+ * them afterwards (same trick as the hover tests).
+ */
+async function withLayoutPatched<T>(fn: () => Promise<T>): Promise<T> {
+	const original = {
+		offsetWidth: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth'),
+		offsetHeight: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight'),
+		rect: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'getBoundingClientRect'),
+		elementFromPoint: Object.getOwnPropertyDescriptor(Document.prototype, 'elementFromPoint'),
+	}
+	try {
+		Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+			configurable: true,
+			get: () => 100,
+		})
+		Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+			configurable: true,
+			get: () => 20,
+		})
+		Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+			configurable: true,
+			value: function (this: HTMLElement) {
+				const index = Array.from(document.querySelectorAll('a,button')).indexOf(this as HTMLElement)
+				const left = index * 100
+				return {
+					left,
+					top: 0,
+					right: left + 100,
+					bottom: 20,
+					width: 100,
+					height: 20,
+					x: left,
+					y: 0,
+					toJSON() {},
+				}
+			},
+		})
+		Object.defineProperty(Document.prototype, 'elementFromPoint', {
+			configurable: true,
+			value: function (this: Document, x: number, y: number) {
+				return (
+					Array.from(this.querySelectorAll('a,button')).find((el) => {
+						const rect = el.getBoundingClientRect()
+						return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+					}) ?? null
+				)
+			},
+		})
+		return await fn()
+	} finally {
+		for (const [key, descriptor] of Object.entries(original)) {
+			const target = key === 'elementFromPoint' ? Document.prototype : HTMLElement.prototype
+			if (descriptor) Object.defineProperty(target, key, descriptor)
+		}
+	}
+}
+
 describe('PageController', () => {
 	it('constructs and exposes the current url', async () => {
 		const controller = new PageController()
@@ -114,6 +174,48 @@ describe('PageController', () => {
 			}
 		})
 	})
+	describe('clickElement', () => {
+		it('refuses target=_blank links and points the model to open_new_tab', async () => {
+			await withLayoutPatched(async () => {
+				document.body.innerHTML = `<a id="ext" href="/energy" target="_blank">Energy</a>`
+				const controller = new PageController()
+				await controller.updateTree()
+
+				const result = await controller.clickElement(0)
+
+				expect(result.success).toBe(false)
+				expect(result.message).toContain('target="_blank"')
+				expect(result.message).toContain('open_new_tab')
+				expect(result.message).toContain('/energy')
+			})
+		})
+
+		it('keeps the full href visible to the model (not truncated to 20 chars)', async () => {
+			await withLayoutPatched(async () => {
+				document.body.innerHTML = `<a id="ext" href="/monitoring/energy-diagnostics" target="_blank">Energy</a>`
+				const controller = new PageController()
+
+				const simplified = await controller.updateTree()
+
+				// The full path must appear in the simplified DOM so the model can
+				// pass it to open_new_tab without guessing a truncated URL.
+				expect(simplified).toContain('href=/monitoring/energy-diagnostics')
+			})
+		})
+
+		it('clicks normal links as before', async () => {
+			await withLayoutPatched(async () => {
+				document.body.innerHTML = `<a id="same" href="/orders">Orders</a>`
+				const controller = new PageController()
+				await controller.updateTree()
+
+				const result = await controller.clickElement(0)
+
+				expect(result.success).toBe(true)
+			})
+		})
+	})
+
 	describe('executeJavascript', () => {
 		it('runs a script and returns its result', async () => {
 			const controller = new PageController()

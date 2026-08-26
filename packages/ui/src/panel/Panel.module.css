@@ -320,7 +320,7 @@
 
 .inputSectionWrapper {
 	position: relative;
-	order: 2;
+	order: 3;
 	z-index: 2;
 	flex: 0 0 auto;
 	min-height: 142px;
@@ -476,6 +476,79 @@
 
 .hidden {
 	display: none !important;
+}
+
+/* Multi-page handoff cards (awaiting navigation / resume / reclaim). */
+.handoffSection {
+	position: relative;
+	order: 2;
+	z-index: 3;
+	flex: 0 0 auto;
+	padding: 0 16px 12px;
+	visibility: visible;
+
+	&.hidden {
+		display: none;
+	}
+}
+
+.handoffCard {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px 14px;
+	color: #253452;
+	background: rgba(255, 249, 229, 0.9);
+	border: 1px solid rgba(214, 168, 66, 0.55);
+	border-radius: 12px;
+	box-shadow: 0 4px 14px rgba(102, 128, 190, 0.1);
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+.handoffCardTitle {
+	font-weight: 600;
+}
+
+.handoffCardActions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.handoffLink {
+	flex: 1 1 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 120px;
+	padding: 7px 12px;
+	color: #fff;
+	background: linear-gradient(135deg, #5b8def, #3f6fd8);
+	border-radius: 8px;
+	text-decoration: none;
+	font-weight: 600;
+
+	&:hover {
+		filter: brightness(1.06);
+	}
+}
+
+.handoffButton {
+	flex: 1 1 auto;
+	min-width: 100px;
+	padding: 7px 12px;
+	color: #2c3d63;
+	background: rgba(226, 235, 255, 0.95);
+	border: 1px solid rgba(119, 165, 255, 0.6);
+	border-radius: 8px;
+	cursor: pointer;
+	font: inherit;
+	font-weight: 600;
+
+	&:hover {
+		background: rgba(210, 224, 255, 0.95);
+	}
 }
 
 .bottomRight {

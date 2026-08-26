@@ -1,5 +1,5 @@
 import { OpenAIClient } from './OpenAIClient'
-import { InvokeError, InvokeErrorTypes } from './errors'
+import { InvokeError, InvokeErrorTypes, MigrationError } from './errors'
 import type {
 	InvokeOptions,
 	InvokeResult,
@@ -10,7 +10,7 @@ import type {
 	Tool,
 } from './types'
 
-export { InvokeError, InvokeErrorTypes }
+export { InvokeError, InvokeErrorTypes, MigrationError }
 export type { InvokeOptions, InvokeResult, LLMClient, LLMConfig, Message, Tool }
 
 /**

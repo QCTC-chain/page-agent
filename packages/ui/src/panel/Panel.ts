@@ -2,7 +2,7 @@ import { I18n, type SupportedLanguage } from '../i18n'
 import { truncate } from '../utils'
 import assistantLogoUrl from './assets/assistant-logo.png'
 import { createCard, createReflectionLines } from './cards'
-import type { AgentActivity, PanelAgentAdapter } from './types'
+import type { AgentActivity, PanelAgentAdapter, PanelHandoff } from './types'
 
 import styles from './Panel.module.css'
 
@@ -52,6 +52,7 @@ export class Panel {
 	#taskInput: HTMLInputElement
 	#sendButton: HTMLButtonElement
 	#launcher: HTMLElement
+	#handoffSection: HTMLElement | null = null
 
 	#agent: PanelAgentAdapter
 	#config: PanelConfig
@@ -75,6 +76,7 @@ export class Panel {
 	#onStatusChange = () => this.#handleStatusChange()
 	#onHistoryChange = () => this.#handleHistoryChange()
 	#onActivity = (e: Event) => this.#handleActivity((e as CustomEvent<AgentActivity>).detail)
+	#onHandoffChange = () => this.#renderHandoffCard()
 	#onAgentDispose = () => this.dispose()
 
 	get wrapper(): HTMLElement {
@@ -108,6 +110,7 @@ export class Panel {
 		this.#taskInput = this.#wrapper.querySelector(`.${styles.taskInput}`)!
 		this.#sendButton = this.#wrapper.querySelector(`.${styles.sendButton}`)!
 		this.#launcher = this.#createLauncher()
+		this.#handoffSection = this.#wrapper.querySelector(`.${styles.handoffSection}`)
 		if (config.position === 'bottom-right') {
 			this.#launcher.classList.add(styles.bottomRight)
 		}
@@ -116,6 +119,7 @@ export class Panel {
 		this.#agent.addEventListener('statuschange', this.#onStatusChange)
 		this.#agent.addEventListener('historychange', this.#onHistoryChange)
 		this.#agent.addEventListener('activity', this.#onActivity)
+		this.#agent.addEventListener('handoffchange', this.#onHandoffChange)
 		this.#agent.addEventListener('dispose', this.#onAgentDispose)
 
 		this.#setupEventListeners()
@@ -154,13 +158,24 @@ export class Panel {
 		}
 
 		// Handle completion
-		if (status === 'completed' || status === 'error' || status === 'stopped') {
+		if (
+			status === 'completed' ||
+			status === 'error' ||
+			status === 'stopped' ||
+			status === 'migrated'
+		) {
 			if (!this.#isExpanded) {
 				this.#expand()
 			}
 			if (this.#shouldShowInputArea()) {
 				this.#showInputArea()
 			}
+		}
+
+		// Migration status is informational: show the handoff message and a hint.
+		if (status === 'migrated') {
+			this.#pendingHeaderText = this.#i18n.t('ui.panel.migrated')
+			this.#updateStatusIndicator('migrated')
 		}
 	}
 
@@ -199,6 +214,13 @@ export class Panel {
 				this.#pendingHeaderText = truncate(activity.message, 50)
 				this.#updateStatusIndicator('error')
 				break
+
+			case 'awaiting_navigation':
+				this.#pendingHeaderText = this.#i18n.t('ui.panel.openingNewTab')
+				this.#updateStatusIndicator('executing')
+				// Re-render the handoff card so the clickable link stays in sync.
+				this.#renderHandoffCard()
+				break
 		}
 	}
 
@@ -220,6 +242,8 @@ export class Panel {
 
 			// Add temporary question card so user can see the full question
 			const tempCard = document.createElement('div')
+			// Question text is escaped by `escapeHtml` in `createCard`.
+			// pi-lens-ignore: no-inner-html, ts-xss-dom-sink
 			tempCard.innerHTML = createCard({
 				icon: '❓',
 				content: `Question: ${question}`,
@@ -315,6 +339,7 @@ export class Panel {
 		this.#agent.removeEventListener('statuschange', this.#onStatusChange)
 		this.#agent.removeEventListener('historychange', this.#onHistoryChange)
 		this.#agent.removeEventListener('activity', this.#onActivity)
+		this.#agent.removeEventListener('handoffchange', this.#onHandoffChange)
 		this.#agent.removeEventListener('dispose', this.#onAgentDispose)
 
 		// Clean up UI
@@ -383,6 +408,8 @@ export class Panel {
 		launcher.title = this.#i18n.t('ui.panel.reopen')
 		launcher.setAttribute('aria-label', this.#i18n.t('ui.panel.reopen'))
 		launcher.setAttribute('data-page-agent-ignore', 'true')
+		// Static asset URL only, no user content.
+		// pi-lens-ignore: no-inner-html
 		launcher.innerHTML = `<img src="${assistantLogoUrl}" alt="AI助手" />`
 		launcher.classList.add(styles.hidden)
 
@@ -414,6 +441,9 @@ export class Panel {
 			// Handle user input mode
 			this.#handleUserAnswer(input)
 		} else {
+			// Allow the host to run inside the submit user gesture (e.g. reserve
+			// a placeholder tab for the `placeholder` handoff strategy).
+			this.#agent.onSubmitGesture?.()
 			// Execute task via agent
 			this.#agent.execute(input)
 		}
@@ -469,7 +499,8 @@ export class Panel {
 		}
 
 		const status = this.#agent.status
-		const isTaskEnded = status === 'completed' || status === 'error' || status === 'stopped'
+		const isTaskEnded =
+			status === 'completed' || status === 'error' || status === 'stopped' || status === 'migrated'
 
 		// Only show input area after task completion if configured to do so
 		if (isTaskEnded) {
@@ -479,6 +510,10 @@ export class Panel {
 		return false
 	}
 
+	// Static template: i18n strings, CSS class names and asset URLs only; user
+	// content is never interpolated here (it flows through `escapeHtml` in
+	// `createCard` into #historySection).
+	// pi-lens-ignore: no-inner-html
 	#createWrapper(): HTMLElement {
 		const taskInputMaxLength = 1000
 		const wrapper = document.createElement('div')
@@ -487,6 +522,10 @@ export class Panel {
 		wrapper.setAttribute('data-browser-use-ignore', 'true')
 		wrapper.setAttribute('data-page-agent-ignore', 'true')
 
+		// Static template: i18n strings, CSS class names and asset URLs only;
+		// user content is never interpolated here (it flows through `escapeHtml`
+		// in `createCard` into #historySection).
+		// pi-lens-ignore: no-inner-html
 		wrapper.innerHTML = `
 			<div class="${styles.background}"></div>
 			<div class="${styles.historySectionWrapper}">
@@ -513,6 +552,7 @@ export class Panel {
 					</button>
 				</div>
 			</div>
+			<div class="${styles.handoffSection} ${styles.hidden}"></div>
 			<div class="${styles.inputSectionWrapper} ${styles.hidden}">
 				<div class="${styles.inputSection}">
 					<input
@@ -587,7 +627,6 @@ export class Panel {
 			e.stopPropagation()
 			this.#submitTask()
 		})
-
 		// Prevent input area click event bubbling
 		this.#inputSection.addEventListener('click', (e) => {
 			e.stopPropagation()
@@ -690,6 +729,7 @@ export class Panel {
 			| 'completed'
 			| 'error'
 			| 'stopped'
+			| 'migrated'
 	): void {
 		// `running` animates like thinking; `idle`/`stopped` use the neutral base.
 		const variant = type === 'running' ? 'thinking' : type
@@ -727,6 +767,103 @@ export class Panel {
 	}
 
 	/**
+	 * Render the multi-page handoff card (awaiting navigation / resume / reclaim).
+	 * Reads `agent.handoff` (set via the `handoffchange` event) and rebuilds the
+	 * dedicated section with DOM APIs (no innerHTML) so URL/task text stays safe.
+	 */
+	#renderHandoffCard(): void {
+		const section = this.#handoffSection
+		if (!section) return
+		const handoff: PanelHandoff | undefined = (
+			this.#agent as PanelAgentAdapter & { handoff?: PanelHandoff }
+		).handoff
+
+		// Clear the section when there is nothing to show.
+		if (!handoff || handoff.kind === null) {
+			section.replaceChildren()
+			section.classList.add(styles.hidden)
+			return
+		}
+
+		// A handoff card must be seen and acted on (e.g. the new tab's
+		// "continue task?" card, or the old tab's reclaim button). Auto-open the
+		// panel so the user does not have to find the launcher first.
+		this.show()
+		this.#expand()
+
+		section.classList.remove(styles.hidden)
+		section.replaceChildren(this.#createHandoffCard(handoff))
+	}
+
+	/** Build one handoff card element from the current handoff state. */
+	#createHandoffCard(handoff: PanelHandoff): HTMLElement {
+		const card = document.createElement('div')
+		card.className = styles.handoffCard
+
+		const title = document.createElement('div')
+		title.className = styles.handoffCardTitle
+
+		const actions = document.createElement('div')
+		actions.className = styles.handoffCardActions
+
+		switch (handoff.kind) {
+			case 'awaiting': {
+				title.textContent = this.#i18n.t('ui.panel.handoffAwaiting')
+
+				const link = document.createElement('a')
+				link.className = styles.handoffLink
+				link.href = handoff.url ?? '#'
+				link.target = '_blank'
+				link.rel = 'noopener'
+				link.textContent = this.#i18n.t('ui.panel.handoffOpen')
+				actions.appendChild(link)
+
+				const cancel = document.createElement('button')
+				cancel.type = 'button'
+				cancel.className = styles.handoffButton
+				cancel.textContent = this.#i18n.t('ui.panel.handoffCancel')
+				cancel.addEventListener('click', () => handoff.cancelAwaitingNavigation?.())
+				actions.appendChild(cancel)
+				break
+			}
+
+			case 'resume': {
+				title.textContent = this.#i18n.t('ui.panel.handoffResumeTitle')
+				const taskText = document.createElement('div')
+				taskText.textContent = handoff.task ?? ''
+				card.appendChild(taskText)
+
+				const resume = document.createElement('button')
+				resume.type = 'button'
+				resume.className = styles.handoffButton
+				resume.textContent = this.#i18n.t('ui.panel.handoffResume')
+				resume.addEventListener('click', () => handoff.resume?.())
+				actions.appendChild(resume)
+				break
+			}
+
+			case 'reclaimable': {
+				title.textContent = this.#i18n.t('ui.panel.handoffReclaimTitle')
+
+				const reclaim = document.createElement('button')
+				reclaim.type = 'button'
+				reclaim.className = styles.handoffButton
+				reclaim.textContent = this.#i18n.t('ui.panel.handoffReclaim')
+				reclaim.addEventListener('click', () => handoff.reclaim?.())
+				actions.appendChild(reclaim)
+				break
+			}
+
+			default:
+				return card
+		}
+
+		card.appendChild(title)
+		card.appendChild(actions)
+		return card
+	}
+
+	/**
 	 * Render the Panel's UI-only session history.
 	 *
 	 * Renders:
@@ -745,6 +882,9 @@ export class Panel {
 			}
 		}
 
+		// Card HTML is escaped by `escapeHtml` in `createCard`; task/history
+		// content never reaches innerHTML unescaped.
+		// pi-lens-ignore: no-inner-html, ts-xss-dom-sink
 		this.#historySection.innerHTML = items.join('')
 		this.#scrollToBottom()
 	}

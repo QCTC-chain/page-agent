@@ -14,6 +14,8 @@ Internal packages:
 - **LLMs** (`packages/llms/`) - LLM client with reflection-before-action mental model
 - **Page Controller** (`packages/page-controller/`) - DOM operations and visual feedback (SimulatorMask), independent of LLM
 - **UI** (`packages/ui/`) - Panel and i18n. Decoupled from PageAgent
+- **Handoff** (`packages/handoff/`) - Same-tab / cross-tab task continuity
+  without an extension (npm: `@page-agent/handoff`)
 
 ## Development Commands
 
@@ -36,6 +38,7 @@ Source-first monorepo: library `package.json` exports point to `src/*.ts` during
 ```
 packages/
 ├── core/                    # npm: "@page-agent/core" ⭐ Core agent logic (headless)
+├── handoff/                 # npm: "@page-agent/handoff" multi-page continuity
 ├── page-agent/              # npm: "page-agent" entry class (with UI + controller + demo builds)
 ├── website/                 # @page-agent/website (private)
 ├── llms/                    # @page-agent/llms
@@ -48,11 +51,15 @@ packages/
 
 ### Module Boundaries
 
-- **Page Agent**: Main entry with UI. Extends PageAgentCore and adds Panel. Imports from `@page-agent/core`, `@page-agent/ui`
+- **Page Agent**: Main entry with UI. Extends PageAgentCore and adds Panel.
+  Imports from `@page-agent/core`, `@page-agent/ui`, `@page-agent/handoff`
 - **Core**: PageAgentCore without UI. Imports from `@page-agent/llms`, `@page-agent/page-controller`
 - **LLMs**: LLM client with MacroToolInput contract. No dependency on page-agent
 - **UI**: Panel and i18n. Decoupled from PageAgent via PanelAgentAdapter interface
 - **Page Controller**: DOM operations with optional visual feedback (SimulatorMask). No LLM dependency. Enable mask via `enableMask: true` config
+- **Handoff**: Browser storage + BroadcastChannel coordination (snapshot
+  persistence, claim/heartbeat/reclaim). No DOM ops, no LLM. Depends on
+  `@page-agent/core` types only
 
 ### PageController ↔ PageAgent Communication
 
@@ -112,6 +119,13 @@ const pageInfo = await this.pageController.getPageInfo()
 | `src/actions.ts`            | Element interactions (click, input, scroll)                |
 | `src/dom/dom_tree/index.js` | Core DOM extraction engine                                 |
 
+### Handoff (`packages/handoff/`)
+
+| File                       | Description                                                         |
+| -------------------------- | ------------------------------------------------------------------- |
+| `src/HandoffController.ts` | ⭐ Storage + BroadcastChannel coordination (persist/claim/reclaim)  |
+| `src/tools.ts`             | `open_new_tab` tool factory (binds to a lazily-resolved controller) |
+
 ## Adding New Features
 
 ### New Agent Tool
@@ -125,6 +139,17 @@ const pageInfo = await this.pageController.getPageInfo()
 1. Add implementation in `packages/page-controller/src/actions.ts`
 2. Expose via async method in `PageController.ts`
 3. Export from `packages/page-controller/src/index.ts`
+
+### Multi-page continuity (no extension)
+
+- `PageAgentCore.execute(task, { initialHistory, initialTaskId })` resumes a serialized snapshot; `serializeAgentState` / `restoreAgentState` / `parseAgentSnapshot` (core) are the migration primitives.
+- `HandoffController` (handoff) persists the active snapshot after each step
+  (sessionStorage) and coordinates cross-tab handoff via a localStorage pending
+  record + BroadcastChannel claim + heartbeat. `PageAgent` wires it when
+  `enableMultiPage: true`.
+- Opening a new tab requires a user gesture: the `open_new_tab` tool emits an `awaiting_navigation` activity and the Panel renders a clickable card (default `confirm` strategy). The `placeholder` strategy pre-reserves a window via `onSubmitGesture`.
+- Only same-origin pages are supported; at most one in-flight LLM step is lost
+  on handoff.
 
 ## Testing
 

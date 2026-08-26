@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Features
 
 - **Hover support** - Added a `hover_element_by_index` action/tool that dispatches the hover event sequence (pointer/mouse move, over, enter) without clicking, revealing JS-triggered menus, flyout submenus, popovers and tooltips (e.g. sidebar items that expand a submenu on hover). The agent prompt now prefers hovering over clicking for such elements, falling back to a click when nothing appears.
+- **Multi-page continuity without an extension** - Added `@page-agent/handoff`, enabling a task to survive reloads / MPA navigation (sessionStorage snapshot) and to hand off to a new tab via a new `open_new_tab` tool (BroadcastChannel claim + localStorage pending record + heartbeat). The user confirms the new tab with a clickable panel card (browsers block popups without a user gesture); the new tab resumes from the last completed step. Enable with `enableMultiPage: true` on `PageAgent` (or `multiPage=true` on the embed script URL); requires same-origin pages. Adds the `migrated` agent status and `PageAgentCore.execute(task, { initialHistory, initialTaskId })` resume support.
 
 ### Limitations
 
 - Synthetic hover events do not trigger pure CSS `:hover` menus, which require a real pointer (e.g. CDP input) and remain unsupported.
+- Multi-page handoff covers same-origin pages only; in-flight LLM requests are not migrated (at most one step is replayed from the last completed step).
 
 ## [1.12.0] - 2026-07-09
 

@@ -54,3 +54,19 @@ export class InvokeError extends Error {
 		this.rawResponse = rawResponse
 	}
 }
+
+/**
+ * Thrown when the agent's task is handed off to another tab/page.
+ *
+ * It must travel through the LLM invocation stack **unwrapped** (OpenAIClient
+ * must not wrap it into a TOOL_EXECUTION_ERROR) and must **never be retried**
+ * (withRetry must throw it immediately). `retryable` is forced to `false`
+ * after construction because the base class derives it from the error type.
+ */
+export class MigrationError extends InvokeError {
+	constructor(message = 'Task migrated to a new tab') {
+		super(InvokeErrorTypes.UNKNOWN, message)
+		this.name = 'MigrationError'
+		this.retryable = false
+	}
+}

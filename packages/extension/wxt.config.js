@@ -5,7 +5,13 @@ import { defineConfig } from 'wxt'
 const chromeProfile = '.wxt/chrome-data'
 mkdirSync(chromeProfile, { recursive: true })
 
-const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'))
+let pkg
+try {
+	pkg = JSON.parse(readFileSync('./package.json', 'utf-8'))
+} catch (error) {
+	// Fail fast with a clear message instead of a cryptic JSON.parse stack.
+	throw new Error(`Failed to read package.json for version: ${String(error)}`)
+}
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -29,7 +35,7 @@ export default defineConfig({
 			chunkSizeWarningLimit: 2000,
 			cssCodeSplit: true,
 			rollupOptions: {
-				onwarn: function (message, handler) {
+				onwarn: (message, handler) => {
 					if (message.code === 'EVAL') return
 					handler(message)
 				},
@@ -40,7 +46,9 @@ export default defineConfig({
 		artifactTemplate: 'page-agent-ext-{{version}}-{{browser}}.zip',
 	},
 	manifest: {
-		key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqbzT0iTYeYlnCvDJIGDnGU8oarJgZILDzSfLi/ufuSxXEPDKuMyD892GhvrMCZNVHS11Sh6NYUOc/PcUOhtaR2urHtcNkrpSJNV10zUamY7fxBdVEkOucfyLu8INVy+teis62MoRWYPaUPkfZUjrLGW8MsZ9aFzARfu9GGDEp2EAYsWDN6w6vyz9LJ82pm542EWnVT4MjmDPgvYFCWGBtaU/dfHD+GAX6URJFapsCvryVURKJ+76c/GO9/I3EX1IBfbY6dec78bLCMvVxiTmiv36KyGPwX1OpakW8IiCpXWdbAxjm+plbYlp5t5zTyyoE3sOSFeXsBH0Kg27o8GcvQIDAQAB',
+		// Chrome extension public identity key (manifest key), intentionally
+		// public to fix the extension ID; NOT a secret.
+		key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqbzT0iTYeYlnCvDJIGDnGU8oarJgZILDzSfLi/ufuSxXEPDKuMyD892GhvrMCZNVHS11Sh6NYUOc/PcUOhtaR2urHtcNkrpSJNV10zUamY7fxBdVEkOucfyLu8INVy+teis62MoRWYPaUPkfZUjrLGW8MsZ9aFzARfu9GGDEp2EAYsWDN6w6vyz9LJ82pm542EWnVT4MjmDPgvYFCWGBtaU/dfHD+GAX6URJFapsCvryVURKJ+76c/GO9/I3EX1IBfbY6dec78bLCMvVxiTmiv36KyGPwX1OpakW8IiCpXWdbAxjm+plbYlp5t5zTyyoE3sOSFeXsBH0Kg27o8GcvQIDAQAB', // gitleaks:allow
 		default_locale: 'en',
 		name: '__MSG_extName__',
 		description: '__MSG_extDescription__',

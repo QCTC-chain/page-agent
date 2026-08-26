@@ -15,6 +15,33 @@ export type AgentActivity =
 	| { type: 'executed'; tool: string; input: unknown; output: string; duration: number }
 	| { type: 'retrying'; attempt: number; maxAttempts: number }
 	| { type: 'error'; message: string }
+	| {
+			/**
+			 * The agent needs the user to open a new tab (popup blockers forbid
+			 * programmatic `window.open` without a user gesture). The Panel should
+			 * render a clickable card for `url`; the user click is the real gesture.
+			 */
+			type: 'awaiting_navigation'
+			url: string
+	  }
+
+/**
+ * Multi-page handoff state rendered by the Panel. Driven by the agent's
+ * `handoffchange` event (Panel listens to it when the agent has `handoff`).
+ */
+export interface PanelHandoff {
+	kind: 'awaiting' | 'resume' | 'reclaimable' | null
+	/** Card link for `awaiting` (user click opens the new tab). */
+	url?: string
+	/** Task text for the `resume` card. */
+	task?: string
+	/** Cancel the awaited navigation; the agent continues in this tab. */
+	cancelAwaitingNavigation?: () => void
+	/** Resume the handed-off task in this tab (new tab). */
+	resume?: () => void
+	/** Take the task back in this tab (old tab, new tab closed/unclaimed). */
+	reclaim?: () => void
+}
 
 /**
  * Minimal interface that Panel expects from an agent.
@@ -29,7 +56,7 @@ export type AgentActivity =
  */
 export interface PanelAgentAdapter extends EventTarget {
 	/** Current agent status */
-	readonly status: 'idle' | 'running' | 'completed' | 'error' | 'stopped'
+	readonly status: 'idle' | 'running' | 'completed' | 'error' | 'stopped' | 'migrated'
 
 	/** Result of the most recent run, or `null` before the first run completes */
 	readonly lastResult: { success: boolean } | null
@@ -61,6 +88,18 @@ export interface PanelAgentAdapter extends EventTarget {
 
 	/** Current task being executed */
 	readonly task: string
+
+	/**
+	 * Optional multi-page handoff hooks rendered by the Panel (awaiting card,
+	 * resume card, reclaim button). Undefined when handoff is disabled.
+	 */
+	readonly handoff?: PanelHandoff
+
+	/**
+	 * Called by the Panel inside the task-submit user gesture (e.g. to reserve
+	 * a placeholder tab for the `placeholder` handoff strategy).
+	 */
+	onSubmitGesture?: () => void
 
 	/**
 	 * Called when the agent needs to ask the user questions.

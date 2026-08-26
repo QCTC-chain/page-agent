@@ -116,6 +116,14 @@ export interface AgentConfig extends LLMConfig {
 	// page behavior hooks
 
 	/**
+	 * Enable the multi-page system prompt variant: the agent may open new tabs
+	 * via the `open_new_tab` handoff tool instead of being restricted to the
+	 * current page. Wire the tool + HandoffController yourself (see
+	 * `@page-agent/handoff` and the `PageAgent` entry).
+	 */
+	multiPage?: boolean
+
+	/**
 	 * @experimental
 	 * Enable the experimental script execution tool that allows executing generated JavaScript code on the page.
 	 * @note Can cause unpredictable side effects.
@@ -181,7 +189,8 @@ export interface AgentReflection {
  * Before executing any action, the LLM must output its reasoning state.
  */
 export interface MacroToolInput extends Partial<AgentReflection> {
-	action: Record<string, any>
+	/** Tool-name → parsed tool input. Validated at runtime by each tool's Zod schema. */
+	action: Record<string, unknown>
 }
 
 /**
@@ -259,8 +268,10 @@ export type HistoricalEvent =
 
 /**
  * Agent lifecycle status.
+ * `migrated` means the task was handed off to another tab/page and the agent
+ * ended its run here (see `MigrationError`).
  */
-export type AgentStatus = 'idle' | 'running' | 'completed' | 'error' | 'stopped'
+export type AgentStatus = 'idle' | 'running' | 'completed' | 'error' | 'stopped' | 'migrated'
 
 /**
  * Agent activity - transient state for immediate UI feedback.
@@ -277,6 +288,15 @@ export type AgentActivity =
 	| { type: 'executed'; tool: string; input: unknown; output: string; duration: number }
 	| { type: 'retrying'; attempt: number; maxAttempts: number }
 	| { type: 'error'; message: string }
+	| {
+			/**
+			 * The agent needs the user to open a new tab (popup blockers forbid
+			 * programmatic `window.open` without a user gesture). The UI should show
+			 * a clickable card for `url`; the user click is the real gesture.
+			 */
+			type: 'awaiting_navigation'
+			url: string
+	  }
 
 export interface ExecutionResult {
 	success: boolean

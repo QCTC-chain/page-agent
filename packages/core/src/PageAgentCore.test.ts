@@ -2,7 +2,7 @@ import type { BrowserState, PageController } from '@page-agent/page-controller'
 import { describe, expect, it, vi } from 'vitest'
 import * as z from 'zod/v4'
 
-import { PageAgentCore, tool } from './PageAgentCore'
+import { MigrationError, PageAgentCore, tool } from './PageAgentCore'
 import type { ExecutionResult } from './types'
 
 type TestFetch = (...args: Parameters<typeof globalThis.fetch>) => Promise<Response>
@@ -428,6 +428,81 @@ describe.concurrent('PageAgentCore lifecycle', () => {
 			expect(observations.some((o) => o.includes('Switched to tab'))).toBe(false)
 		})
 	})
+	describe('resume from snapshot (multi-page continuity)', () => {
+		it('continues step numbering and keeps taskId when given initialHistory', async () => {
+			const fetchMock = createFetchMock()
+				.mockResolvedValueOnce(waitResponse()) // step 1: wait
+				.mockResolvedValueOnce(doneResponse('done one')) // step 2: done
+				.mockResolvedValueOnce(doneResponse('done two')) // resumed run, first step
+			const agent = createAgent(fetchMock, {
+				customTools: {
+					// Instant wait so the seeded history's steps do not sleep 10s each.
+					wait: tool({
+						description: 'instant wait for tests',
+						inputSchema: z.object({ seconds: z.number() }),
+						execute: async () => '✅ Waited.',
+					}),
+				},
+			})
+
+			const first = await agent.execute('first')
+			expect(first.history.filter((e) => e.type === 'step')).toHaveLength(2)
+
+			// Resume exactly like a handed-off tab would (new task text, seeded history + taskId).
+			const second = await agent.execute('second', {
+				initialHistory: first.history,
+				initialTaskId: 'task-keep-me',
+			})
+
+			expect(second.success).toBe(true)
+			expect(agent.task).toBe('second')
+			expect(agent.taskId).toBe('task-keep-me')
+			const steps = agent.history.filter((e) => e.type === 'step')
+			expect(steps).toHaveLength(3)
+			expect(steps[2].stepIndex).toBe(2) // numbering continues after the seeded history
+		})
+
+		it('starts at step 0 when no initialHistory is provided', async () => {
+			const fetchMock = createFetchMock().mockResolvedValueOnce(doneResponse('fresh'))
+			const agent = createAgent(fetchMock)
+
+			await agent.execute('fresh task')
+
+			const steps = agent.history.filter((e) => e.type === 'step')
+			expect(steps).toHaveLength(1)
+			expect(steps[0].stepIndex).toBe(0)
+		})
+	})
+
+	describe('migration', () => {
+		it('ends the run with migrated status when a tool throws MigrationError', async () => {
+			const fetchMock = createFetchMock().mockResolvedValue(
+				agentResponse({ action: { migrate: {} } })
+			)
+			const agent = createAgent(fetchMock, {
+				maxRetries: 5, // migration must NOT be retried
+				customTools: {
+					migrate: tool({
+						description: 'Hand the task off to another tab.',
+						inputSchema: z.object({}),
+						execute: async () => {
+							throw new MigrationError('Task migrated to a new tab')
+						},
+					}),
+				},
+			})
+
+			const result = await agent.execute('migrate task')
+
+			expect(fetchMock).toHaveBeenCalledTimes(1) // no retries despite maxRetries=5
+			expect(agent.status).toBe('migrated')
+			expect(result.success).toBe(false)
+			expect(result.data).toContain('migrated')
+			// No error event pollutes the history: the old tab may reclaim and resume it.
+			expect(agent.history.some((e) => e.type === 'error')).toBe(false)
+		})
+	})
+
 	describe('cancellation edge cases', () => {
 		it('rejects a new task while a stop is still settling', async () => {
 			const fetchMock = createFetchMock().mockResolvedValueOnce(waitResponse())

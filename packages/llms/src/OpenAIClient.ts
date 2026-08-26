@@ -3,7 +3,7 @@
  */
 import * as z from 'zod/v4'
 
-import { InvokeError, InvokeErrorTypes } from './errors'
+import { InvokeError, InvokeErrorTypes, MigrationError } from './errors'
 import type {
 	InvokeOptions,
 	InvokeResult,
@@ -239,7 +239,9 @@ export class OpenAIClient implements LLMClient {
 		try {
 			toolResult = await tool.execute(toolInput)
 		} catch (error: unknown) {
-			if ((error as any)?.name === 'AbortError') throw error
+			// Abort and task-migration signals must propagate as-is: abort stops the
+			// whole run, and MigrationError ends the run with a 'migrated' status.
+			if ((error as any)?.name === 'AbortError' || error instanceof MigrationError) throw error
 			throw new InvokeError(
 				InvokeErrorTypes.TOOL_EXECUTION_ERROR,
 				`Tool execution failed: ${(error as Error)?.message}`,

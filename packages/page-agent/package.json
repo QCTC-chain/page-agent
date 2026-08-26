@@ -55,6 +55,7 @@
     },
     "dependencies": {
         "@page-agent/core": "1.12.2",
+        "@page-agent/handoff": "1.12.2",
         "@page-agent/llms": "1.12.2",
         "@page-agent/page-controller": "1.12.2",
         "@page-agent/ui": "1.12.2",

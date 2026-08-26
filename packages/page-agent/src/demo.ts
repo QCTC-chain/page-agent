@@ -14,7 +14,15 @@ import { PageController } from '@page-agent/page-controller'
 import { PageAgent, type PageAgentConfig } from './PageAgent'
 
 const currentScript = document.currentScript as HTMLScriptElement | null
-const currentScriptURL = currentScript?.src ? new URL(currentScript.src) : null
+let currentScriptURL: URL | null = null
+if (currentScript?.src) {
+	try {
+		currentScriptURL = new URL(currentScript.src)
+	} catch {
+		// A malformed script src is not fatal; fall back to defaults below.
+		currentScriptURL = null
+	}
+}
 const autoInit = currentScriptURL?.searchParams.get('autoInit') !== 'false'
 
 // Clean up existing instances to prevent multiple injections from bookmarklet
@@ -47,8 +55,11 @@ if (autoInit) {
 			const language = (url.searchParams.get('lang') as 'zh-CN' | 'en-US') || 'zh-CN'
 			const position =
 				(url.searchParams.get('position') as 'bottom-center' | 'bottom-right') || 'bottom-center'
+			const enableMultiPage = url.searchParams.get('multiPage') === 'true'
+			// Mask defaults to enabled (PageAgent behavior); pass enableMask=false to disable.
+			const enableMask = url.searchParams.get('enableMask') !== 'false'
 			showPanel = ((url.searchParams.get('showPanel') as 'true' | 'false') || 'true') === 'true'
-			config = { model, baseURL, apiKey, language, position }
+			config = { model, baseURL, apiKey, language, position, enableMultiPage, enableMask }
 		} else {
 			console.log('🚀 page-agent.js no current script detected, using default demo config')
 			config = {

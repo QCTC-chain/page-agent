@@ -1,9 +1,3 @@
-// Unified typecheck config for all lib/website packages.
-// Run: tsc --noEmit -p tsconfig.typecheck.json
-// Extension is checked separately (WXT has its own tsconfig base).
-//
-// With source-first package.json exports, TS resolves @page-agent/*
-// to sibling src/ via workspace symlinks — no paths mapping needed.
 {
     "extends": "./tsconfig.base.json",
     "compilerOptions": {
@@ -19,6 +13,7 @@
         "packages/page-controller/src/**/*",
         "packages/ui/src/**/*",
         "packages/core/src/**/*",
+        "packages/handoff/src/**/*",
         "packages/page-agent/src/**/*",
         "packages/website/src/**/*"
     ]

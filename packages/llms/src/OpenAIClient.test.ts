@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as z from 'zod/v4'
 
 import { OpenAIClient } from './OpenAIClient'
-import { InvokeError, InvokeErrorTypes } from './errors'
+import { InvokeError, InvokeErrorTypes, MigrationError } from './errors'
 import { parseLLMConfig } from './index'
 import type { LLMConfig, Tool } from './types'
 
@@ -297,6 +297,19 @@ describe('OpenAIClient.invoke — response anomalies', () => {
 			type: InvokeErrorTypes.TOOL_EXECUTION_ERROR,
 			message: expect.stringContaining('downstream blew up'),
 		})
+	})
+
+	it('propagates MigrationError from tool.execute unwrapped and as-is', async () => {
+		const { client, fetchMock } = makeClient()
+		const tool: Tool<{ name: string }, string> = {
+			inputSchema: z.object({ name: z.string() }),
+			execute: vi.fn(async () => {
+				throw new MigrationError('Task migrated to a new tab')
+			}),
+		}
+		fetchMock.mockResolvedValue(jsonResponse(toolCallBody('greet', { name: 'x' })))
+
+		await expect(client.invoke([], { greet: tool }, signal)).rejects.toBeInstanceOf(MigrationError)
 	})
 })
 

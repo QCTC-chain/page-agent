@@ -1,0 +1,60 @@
+{
+    "name": "@page-agent/handoff",
+    "private": false,
+    "version": "1.12.2",
+    "type": "module",
+    "main": "./src/index.ts",
+    "types": "./src/index.ts",
+    "exports": {
+        ".": {
+            "types": "./src/index.ts",
+            "default": "./src/index.ts"
+        }
+    },
+    "publishConfig": {
+        "main": "./dist/lib/handoff.js",
+        "module": "./dist/lib/handoff.js",
+        "types": "./dist/lib/index.d.ts",
+        "exports": {
+            ".": {
+                "types": "./dist/lib/index.d.ts",
+                "import": "./dist/lib/handoff.js",
+                "default": "./dist/lib/handoff.js"
+            }
+        }
+    },
+    "files": [
+        "dist/"
+    ],
+    "description": "Same-tab and cross-tab task handoff for page-agent without a browser extension",
+    "keywords": [
+        "page-agent",
+        "multi-tab",
+        "handoff",
+        "broadcast-channel",
+        "continuity"
+    ],
+    "author": "Simon<gaomeng1900>",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/alibaba/page-agent.git",
+        "directory": "packages/handoff"
+    },
+    "homepage": "https://alibaba.github.io/page-agent/",
+    "scripts": {
+        "build": "vite build",
+        "test": "vitest run",
+        "prepublishOnly": "node ../../scripts/pre-publish.js",
+        "postpublish": "node ../../scripts/post-publish.js"
+    },
+    "dependencies": {
+        "@page-agent/core": "1.12.2"
+    },
+    "peerDependencies": {
+        "zod": "^3.25.0 || ^4.0.0"
+    },
+    "devDependencies": {
+        "zod": "^4.4.3"
+    }
+}
