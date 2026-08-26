@@ -59,7 +59,7 @@ export interface PanelAgentAdapter extends EventTarget {
 	readonly status: 'idle' | 'running' | 'completed' | 'error' | 'stopped' | 'migrated'
 
 	/** Result of the most recent run, or `null` before the first run completes */
-	readonly lastResult: { success: boolean } | null
+	readonly lastResult: { success: boolean; data?: string } | null
 
 	/** History of agent events */
 	readonly history: readonly {

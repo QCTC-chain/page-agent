@@ -1,7 +1,7 @@
 import { I18n, type SupportedLanguage } from '../i18n'
 import { truncate } from '../utils'
 import assistantLogoUrl from './assets/assistant-logo.png'
-import { createCard, createReflectionLines } from './cards'
+import { createCard, createReflectionLines, createResultCard, createStepCard } from './cards'
 import type { AgentActivity, PanelAgentAdapter, PanelHandoff } from './types'
 
 import styles from './Panel.module.css'
@@ -36,7 +36,8 @@ interface PanelHistorySession {
  *
  * Architecture:
  * - History list: renders directly from agent.history (historical events)
- * - Header bar: shows activity events (transient state) and agent status
+ * - Activity section: shows transient activity below the persisted history
+ * - Header bar: shows the agent status and controls
  *
  * This separation ensures data consistency - history is the single source of truth
  * for what has been done, while activity shows what is happening now.
@@ -46,6 +47,7 @@ export class Panel {
 	#indicator: HTMLElement
 	#statusText: HTMLElement
 	#historySection: HTMLElement
+	#activitySection: HTMLElement
 	#expandButton: HTMLElement
 	#actionButton: HTMLElement
 	#inputSection: HTMLElement
@@ -60,9 +62,7 @@ export class Panel {
 	#i18n: I18n
 	#userAnswerResolver: ((input: string) => void) | null = null
 	#isWaitingForUserAnswer: boolean = false
-	#headerUpdateTimer: ReturnType<typeof setInterval> | null = null
-	#pendingHeaderText: string | null = null
-	#isAnimating = false
+	#showResultCard = false
 	/** Reference used to distinguish a new core task from incremental history updates. */
 	#activeCoreHistory: PanelAgentAdapter['history'] | null = null
 	/**
@@ -78,6 +78,8 @@ export class Panel {
 	#onActivity = (e: Event) => this.#handleActivity((e as CustomEvent<AgentActivity>).detail)
 	#onHandoffChange = () => this.#renderHandoffCard()
 	#onAgentDispose = () => this.dispose()
+	#onExpandableTextClick = (e: Event) => this.#handleExpandableTextEvent(e)
+	#onExpandableTextKeydown = (e: KeyboardEvent) => this.#handleExpandableTextEvent(e)
 
 	get wrapper(): HTMLElement {
 		return this.#wrapper
@@ -104,6 +106,7 @@ export class Panel {
 		this.#indicator = this.#wrapper.querySelector(`.${styles.indicator}`)!
 		this.#statusText = this.#wrapper.querySelector(`.${styles.statusText}`)!
 		this.#historySection = this.#wrapper.querySelector(`.${styles.historySection}`)!
+		this.#activitySection = this.#wrapper.querySelector(`.${styles.activitySection}`)!
 		this.#expandButton = this.#wrapper.querySelector(`.${styles.expandButton}`)!
 		this.#actionButton = this.#wrapper.querySelector(`.${styles.stopButton}`)!
 		this.#inputSection = this.#wrapper.querySelector(`.${styles.inputSectionWrapper}`)!
@@ -121,9 +124,10 @@ export class Panel {
 		this.#agent.addEventListener('activity', this.#onActivity)
 		this.#agent.addEventListener('handoffchange', this.#onHandoffChange)
 		this.#agent.addEventListener('dispose', this.#onAgentDispose)
+		this.#historySection.addEventListener('click', this.#onExpandableTextClick)
+		this.#historySection.addEventListener('keydown', this.#onExpandableTextKeydown)
 
 		this.#setupEventListeners()
-		this.#startHeaderUpdateLoop()
 
 		this.#showInputArea()
 
@@ -135,26 +139,35 @@ export class Panel {
 	/** Handle agent status change */
 	#handleStatusChange(): void {
 		const status = this.#agent.status
+		if (status === 'running') this.#showResultCard = false
+		if (status === 'completed' || status === 'error') this.#showResultCard = true
 
 		// Map agent status to UI indicator. A `completed` run whose result reports
 		// failure shows as error; other statuses map to their own indicator.
 		const failed = status === 'completed' && this.#agent.lastResult?.success === false
 		this.#updateStatusIndicator(failed ? 'error' : status)
-
-		// Morph action button: running = stop (■), not running = close (X)
-		if (status === 'running') {
-			this.#actionButton.innerHTML = '■'
-			this.#actionButton.title = this.#i18n.t('ui.panel.stop')
-		} else {
-			this.#actionButton.innerHTML =
-				'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>'
-			this.#actionButton.title = this.#i18n.t('ui.panel.close')
+		if (status === 'completed') {
+			this.#statusText.textContent = failed
+				? this.#i18n.t('ui.errors.executionFailed')
+				: this.#i18n.t('ui.panel.taskCompleted')
+		} else if (status === 'stopped') {
+			this.#statusText.textContent = this.#i18n.t('ui.panel.taskTerminated')
+		} else if (status === 'error') {
+			this.#statusText.textContent = this.#i18n.t('ui.errors.executionFailed')
 		}
+
+		// The header control always closes the panel; pause lives in the composer.
+		this.#actionButton.innerHTML =
+			'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>'
+		this.#actionButton.title = this.#i18n.t('ui.panel.close')
+		this.#actionButton.setAttribute('aria-label', this.#i18n.t('ui.panel.close'))
 
 		// Show/hide based on status
 		if (status === 'running') {
 			this.show()
-			this.#hideInputArea() // Hide input while running
+			this.#inputSection.classList.remove(styles.hidden)
+			this.#taskInput.disabled = true
+			this.#updateSendButton(true)
 		}
 
 		// Handle completion
@@ -164,17 +177,21 @@ export class Panel {
 			status === 'stopped' ||
 			status === 'migrated'
 		) {
+			if (status === 'completed' || status === 'stopped' || status === 'migrated') {
+				this.#renderActivity(null)
+			}
 			if (!this.#isExpanded) {
 				this.#expand()
 			}
 			if (this.#shouldShowInputArea()) {
 				this.#showInputArea()
 			}
+			this.#renderHistory()
 		}
 
 		// Migration status is informational: show the handoff message and a hint.
 		if (status === 'migrated') {
-			this.#pendingHeaderText = this.#i18n.t('ui.panel.migrated')
+			this.#statusText.textContent = this.#i18n.t('ui.panel.migrated')
 			this.#updateStatusIndicator('migrated')
 		}
 	}
@@ -185,38 +202,31 @@ export class Panel {
 		this.#renderHistory()
 	}
 
-	/**
-	 * Handle agent activity - transient state for immediate UI feedback
-	 * Activity events are NOT persisted in history, only used for header bar updates
-	 */
+	/** Render transient activity below the persisted history cards. */
 	#handleActivity(activity: AgentActivity): void {
+		this.#renderActivity(activity)
 		switch (activity.type) {
 			case 'thinking':
-				this.#pendingHeaderText = this.#i18n.t('ui.panel.thinking')
 				this.#updateStatusIndicator('thinking')
 				break
 
 			case 'executing':
-				this.#pendingHeaderText = this.#getToolExecutingText(activity.tool, activity.input)
 				this.#updateStatusIndicator('executing')
 				break
 
 			case 'executed':
-				this.#pendingHeaderText = truncate(activity.output, 50)
+				this.#updateStatusIndicator('executed')
 				break
 
 			case 'retrying':
-				this.#pendingHeaderText = `Retrying (${activity.attempt}/${activity.maxAttempts})`
 				this.#updateStatusIndicator('retrying')
 				break
 
 			case 'error':
-				this.#pendingHeaderText = truncate(activity.message, 50)
 				this.#updateStatusIndicator('error')
 				break
 
 			case 'awaiting_navigation':
-				this.#pendingHeaderText = this.#i18n.t('ui.panel.openingNewTab')
 				this.#updateStatusIndicator('executing')
 				// Re-render the handoff card so the clickable link stays in sync.
 				this.#renderHandoffCard()
@@ -314,7 +324,9 @@ export class Panel {
 		this.#statusText.textContent = this.#i18n.t('ui.panel.ready')
 		this.#updateStatusIndicator('thinking')
 		this.#historySessions = []
+		this.#showResultCard = false
 		this.#renderHistory()
+		this.#renderActivity(null)
 		this.#collapse()
 		// Reset user input state
 		this.#isWaitingForUserAnswer = false
@@ -341,10 +353,11 @@ export class Panel {
 		this.#agent.removeEventListener('activity', this.#onActivity)
 		this.#agent.removeEventListener('handoffchange', this.#onHandoffChange)
 		this.#agent.removeEventListener('dispose', this.#onAgentDispose)
+		this.#historySection.removeEventListener('click', this.#onExpandableTextClick)
+		this.#historySection.removeEventListener('keydown', this.#onExpandableTextKeydown)
 
 		// Clean up UI
 		this.#isWaitingForUserAnswer = false
-		this.#stopHeaderUpdateLoop()
 		this.#launcher.remove()
 		this.wrapper.remove()
 	}
@@ -373,15 +386,9 @@ export class Panel {
 		}
 	}
 
-	/**
-	 * Action button handler: stop when running, close (hide + launcher) when idle
-	 */
+	/** Close the panel regardless of whether the agent is currently running. */
 	#handleActionButton(): void {
-		if (this.#agent.status === 'running') {
-			this.#agent.stop()
-		} else {
-			this.#close()
-		}
+		this.#close()
 	}
 
 	/**
@@ -473,6 +480,8 @@ export class Panel {
 		this.#taskInput.value = ''
 		this.#taskInput.placeholder = placeholder || this.#i18n.t('ui.panel.taskInput')
 		this.#inputSection.classList.remove(styles.hidden)
+		this.#taskInput.disabled = false
+		this.#updateSendButton(false)
 		// Focus on input field
 		setTimeout(() => {
 			this.#taskInput.focus()
@@ -484,6 +493,22 @@ export class Panel {
 	 */
 	#hideInputArea(): void {
 		this.#inputSection.classList.add(styles.hidden)
+	}
+
+	/** Update the composer control between submit and pause modes. */
+	#updateSendButton(isRunning: boolean): void {
+		if (isRunning) {
+			this.#sendButton.innerHTML =
+				'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>'
+			this.#sendButton.title = this.#i18n.t('ui.panel.pause')
+			this.#sendButton.setAttribute('aria-label', this.#i18n.t('ui.panel.pause'))
+			return
+		}
+
+		this.#sendButton.innerHTML =
+			'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 16-8-5 16-3-6-8-2Z"/><path d="m12 14 4-4"/></svg>'
+		this.#sendButton.title = '发送'
+		this.#sendButton.setAttribute('aria-label', '发送')
 	}
 
 	/**
@@ -530,6 +555,7 @@ export class Panel {
 			<div class="${styles.background}"></div>
 			<div class="${styles.historySectionWrapper}">
 				<div class="${styles.historySection}"></div>
+				<div class="${styles.activitySection} ${styles.hidden}"></div>
 			</div>
 			<div class="${styles.header}">
 				<div class="${styles.statusSection}">
@@ -625,6 +651,10 @@ export class Panel {
 
 		this.#sendButton.addEventListener('click', (e) => {
 			e.stopPropagation()
+			if (this.#agent.status === 'running' && !this.#isWaitingForUserAnswer) {
+				void this.#agent.stop()
+				return
+			}
 			this.#submitTask()
 		})
 		// Prevent input area click event bubbling
@@ -653,71 +683,6 @@ export class Panel {
 		this.#expandButton.textContent = '▼'
 	}
 
-	/**
-	 * Start periodic header update loop
-	 */
-	#startHeaderUpdateLoop(): void {
-		// Check every 450ms (same as total animation duration)
-		this.#headerUpdateTimer = setInterval(() => {
-			this.#checkAndUpdateHeader()
-		}, 450)
-	}
-
-	/**
-	 * Stop periodic header update loop
-	 */
-	#stopHeaderUpdateLoop(): void {
-		if (this.#headerUpdateTimer) {
-			clearInterval(this.#headerUpdateTimer)
-			this.#headerUpdateTimer = null
-		}
-	}
-
-	/**
-	 * Check if header needs update and trigger animation if not currently animating
-	 */
-	#checkAndUpdateHeader(): void {
-		// If no pending text or currently animating, skip
-		if (!this.#pendingHeaderText || this.#isAnimating) {
-			return
-		}
-
-		// If text is already displayed, clear pending and skip
-		if (this.#statusText.textContent === this.#pendingHeaderText) {
-			this.#pendingHeaderText = null
-			return
-		}
-
-		// Start animation
-		const textToShow = this.#pendingHeaderText
-		this.#pendingHeaderText = null
-		this.#animateTextChange(textToShow)
-	}
-
-	/**
-	 * Animate text change with fade out/in effect
-	 */
-	#animateTextChange(newText: string): void {
-		this.#isAnimating = true
-
-		// Fade out current text
-		this.#statusText.classList.add(styles.fadeOut)
-
-		setTimeout(() => {
-			// Update text content
-			this.#statusText.textContent = newText
-
-			// Fade in new text
-			this.#statusText.classList.remove(styles.fadeOut)
-			this.#statusText.classList.add(styles.fadeIn)
-
-			setTimeout(() => {
-				this.#statusText.classList.remove(styles.fadeIn)
-				this.#isAnimating = false
-			}, 300)
-		}, 150) // Half the duration of fade out animation
-	}
-
 	#updateStatusIndicator(
 		type:
 			| 'idle'
@@ -744,6 +709,58 @@ export class Panel {
 		setTimeout(() => {
 			this.#historySection.scrollTop = this.#historySection.scrollHeight
 		}, 0)
+	}
+
+	/** Toggle a truncated card row when it is clicked or activated by keyboard. */
+	#handleExpandableTextEvent(event: Event): void {
+		if (event.type === 'keydown') {
+			const keyboardEvent = event as KeyboardEvent
+			if (keyboardEvent.key !== 'Enter' && keyboardEvent.key !== ' ') return
+			keyboardEvent.preventDefault()
+		}
+
+		const target = (event.target as HTMLElement).closest<HTMLElement>('[data-expandable="true"]')
+		if (!target || !this.#historySection.contains(target)) return
+
+		const expanded = target.classList.toggle(styles.expandedText)
+		target.setAttribute('aria-expanded', expanded.toString())
+	}
+
+	/** Render the current transient activity without persisting it as history. */
+	#renderActivity(activity: AgentActivity | null): void {
+		if (!activity) {
+			this.#activitySection.replaceChildren()
+			this.#activitySection.classList.add(styles.hidden)
+			return
+		}
+
+		let icon = '✦'
+		let text = this.#i18n.t('ui.panel.thinking')
+		let type: 'activity' | 'error' = 'activity'
+		if (activity.type === 'executing') {
+			icon = '◉'
+			text = this.#getToolExecutingText(activity.tool, activity.input)
+		} else if (activity.type === 'executed') {
+			icon = '✓'
+			text = truncate(activity.output, 180)
+		} else if (activity.type === 'retrying') {
+			icon = '↻'
+			text = `Retrying (${activity.attempt}/${activity.maxAttempts})`
+		} else if (activity.type === 'error') {
+			icon = '⚠'
+			text = truncate(activity.message, 180)
+			type = 'error'
+		} else if (activity.type === 'awaiting_navigation') {
+			icon = '↗'
+			text = this.#i18n.t('ui.panel.openingNewTab')
+		}
+
+		const tempCard = document.createElement('div')
+		// Activity text is escaped by createCard before insertion.
+		// pi-lens-ignore: no-inner-html, ts-xss-dom-sink
+		tempCard.innerHTML = createCard({ icon, content: text, type })
+		this.#activitySection.replaceChildren(tempCard.firstElementChild!)
+		this.#activitySection.classList.remove(styles.hidden)
 	}
 
 	/**
@@ -868,9 +885,8 @@ export class Panel {
 	 *
 	 * Renders:
 	 * 1. Each submitted task
-	 * 2. Reflection cards (evaluation, memory, next_goal)
-	 * 3. Tool execution with output
-	 * 4. Observations
+	 * 2. Grouped step cards with reflection and tool execution
+	 * 3. Observations
 	 */
 	#renderHistory(): void {
 		const items: string[] = []
@@ -882,6 +898,9 @@ export class Panel {
 			}
 		}
 
+		const resultCard = this.#createResultCard()
+		if (resultCard) items.push(resultCard)
+
 		// Card HTML is escaped by `escapeHtml` in `createCard`; task/history
 		// content never reaches innerHTML unescaped.
 		// pi-lens-ignore: no-inner-html, ts-xss-dom-sink
@@ -891,6 +910,26 @@ export class Panel {
 
 	#createTaskCard(task: string): string {
 		return createCard({ icon: '🎯', content: task, type: 'input' })
+	}
+
+	/** Build the final result card from the latest completed agent result. */
+	#createResultCard(): string | null {
+		if (!this.#showResultCard) return null
+		if (this.#agent.status !== 'completed' && this.#agent.status !== 'error') return null
+		const result = this.#agent.lastResult
+		if (!result) return null
+
+		const latestSession = this.#historySessions.at(-1)
+		const doneEvent = latestSession?.history
+			.slice()
+			.reverse()
+			.find((event) => event.type === 'step' && event.action?.name === 'done')
+		const doneInput =
+			doneEvent?.type === 'step' ? (doneEvent.action?.input as { text?: string }) : null
+		const content =
+			result.data || doneInput?.text || (result.success ? 'Task completed' : 'Task failed')
+
+		return createResultCard({ success: result.success, content })
 	}
 
 	/** Create cards for a history event */
@@ -904,18 +943,17 @@ export class Panel {
 				: undefined
 
 		if (event.type === 'step') {
-			// Reflection card
-			if (event.reflection) {
-				const lines = createReflectionLines(event.reflection)
-				if (lines.length > 0) {
-					cards.push(createCard({ icon: '🧠', content: lines, meta }))
-				}
-			}
-
-			// Action card
 			const action = event.action
-			if (action) {
-				cards.push(...this.#createActionCards(action, meta))
+			if (action && event.stepIndex !== undefined) {
+				cards.push(
+					createStepCard({
+						number: (event.stepIndex + 1).toString(),
+						reflection: event.reflection ? createReflectionLines(event.reflection) : [],
+						actionName: action.name,
+						actionInput: this.#formatActionInput(action.input),
+						actionOutput: action.output,
+					})
+				)
 			}
 		} else if (event.type === 'observation') {
 			cards.push(
@@ -935,39 +973,12 @@ export class Panel {
 		return cards
 	}
 
-	/** Create cards for an action */
-	#createActionCards(
-		action: { name: string; input: unknown; output: string },
-		meta?: string
-	): string[] {
-		const cards: string[] = []
-
-		if (action.name === 'done') {
-			const input = action.input as { text?: string }
-			const text = input.text || action.output || ''
-			if (text) {
-				cards.push(createCard({ icon: '🤖', content: text, meta, type: 'output' }))
-			}
-		} else if (action.name === 'ask_user') {
-			const input = action.input as { question?: string }
-			const answer = action.output.replace(/^User answered:\s*/i, '')
-			cards.push(
-				createCard({
-					icon: '❓',
-					content: `Question: ${input.question || ''}`,
-					meta,
-					type: 'question',
-				})
-			)
-			cards.push(createCard({ icon: '💬', content: `Answer: ${answer}`, meta, type: 'input' }))
-		} else {
-			const toolText = this.#getToolExecutingText(action.name, action.input)
-			cards.push(createCard({ icon: '🔨', content: toolText, meta }))
-			if (action.output?.length > 0) {
-				cards.push(createCard({ icon: '🔨', content: action.output, meta, type: 'output' }))
-			}
+	/** Format action arguments for the compact action row. */
+	#formatActionInput(input: unknown): string {
+		try {
+			return JSON.stringify(input) ?? '{}'
+		} catch {
+			return String(input)
 		}
-
-		return cards
 	}
 }

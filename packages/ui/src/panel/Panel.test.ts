@@ -12,7 +12,7 @@ const LAUNCHER_ID = 'page-agent-runtime_agent-panel-launcher'
 /** Minimal agent implementing PanelAgentAdapter for UI tests */
 class FakeAgent extends EventTarget implements PanelAgentAdapter {
 	status: PanelAgentAdapter['status'] = 'idle'
-	lastResult: { success: boolean } | null = null
+	lastResult: { success: boolean; data?: string } | null = null
 	history: PanelAgentAdapter['history'] = []
 	task = ''
 	onAskUser = undefined
@@ -170,16 +170,31 @@ describe('Panel close / reopen', () => {
 		expect(launcher.classList.contains(styles.hidden)).toBe(true)
 	})
 
-	it('stops the running agent instead of closing the panel', () => {
+	it('closes the panel while running without stopping the agent', () => {
 		const { agent } = createPanel('running')
 		const wrapper = document.getElementById(PANEL_ID)!
-		const stopButton = wrapper.querySelector<HTMLButtonElement>('button[title="Stop"]')!
+		const closeButton = wrapper.querySelector<HTMLButtonElement>('button[title="Close"]')!
 
-		stopButton.click()
+		closeButton.click()
+
+		expect(agent.stop).not.toHaveBeenCalled()
+		expect(agent.dispose).not.toHaveBeenCalled()
+		expect(wrapper.style.display).toBe('none')
+	})
+
+	it('uses the composer button to pause a running task', () => {
+		const { agent } = createPanel('running')
+		const wrapper = document.getElementById(PANEL_ID)!
+		const sendButton = wrapper.querySelector<HTMLButtonElement>('button[title="Pause"]')!
+		const input = wrapper.querySelector<HTMLInputElement>('input')!
+
+		expect(input.disabled).toBe(true)
+		sendButton.click()
 
 		expect(agent.stop).toHaveBeenCalledTimes(1)
-		expect(agent.dispose).not.toHaveBeenCalled()
-		expect(wrapper.style.display).not.toBe('none')
+		agent.setStatus('stopped')
+		expect(wrapper.querySelector<HTMLButtonElement>('button[title="发送"]')).not.toBeNull()
+		expect(input.disabled).toBe(false)
 	})
 
 	it('removes the panel and the launcher when the agent is disposed externally', () => {
@@ -284,6 +299,137 @@ describe('Panel handoff cards (multi-page)', () => {
 		expect(wrapper.style.display).not.toBe('none')
 		expect(wrapper.classList.contains(styles.expanded)).toBe(true)
 		panels.push(panel)
+	})
+})
+
+describe('Panel conversation cards', () => {
+	const panels: Panel[] = []
+
+	afterEach(() => {
+		panels.splice(0).forEach((panel) => panel.dispose())
+		document.body.innerHTML = ''
+	})
+
+	it('groups reflection and action output into one step card', () => {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panels.push(panel)
+		agent.task = 'inspect profile'
+		agent.history = [
+			{
+				type: 'step',
+				stepIndex: 0,
+				reflection: { memory: 'Open the account menu', next_goal: 'Click profile' },
+				action: {
+					name: 'click_element_by_index',
+					input: { index: 20 },
+					output: 'Clicked element [20]',
+				},
+			},
+		]
+		agent.dispatchEvent(new Event('historychange'))
+
+		const wrapper = panel.wrapper
+		expect(wrapper.querySelectorAll(`.${styles.step}`)).toHaveLength(1)
+		expect(wrapper.textContent).toContain('Step #1')
+		expect(wrapper.textContent).toContain('Actions')
+		expect(wrapper.textContent).toContain('click_element_by_index')
+		expect(wrapper.textContent).toContain('Clicked element [20]')
+	})
+
+	it('expands a truncated step row on click and keyboard activation', () => {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panels.push(panel)
+		agent.task = 'inspect profile'
+		agent.history = [
+			{
+				type: 'step',
+				stepIndex: 0,
+				reflection: {
+					memory:
+						'当前页面已经加载完成，这是一段足够长的思考过程文本，用于验证点击后能够展开完整内容。',
+				},
+				action: {
+					name: 'hover_element_by_index',
+					input: { index: 20 },
+					output: 'Hovered element [20]. Any revealed menu or popup content is now available.',
+				},
+			},
+		]
+		agent.dispatchEvent(new Event('historychange'))
+
+		const line = panel.wrapper.querySelector<HTMLElement>(`.${styles.stepReflectionLine}`)!
+		expect(line.getAttribute('aria-expanded')).toBe('false')
+		line.click()
+		expect(line.classList.contains(styles.expandedText)).toBe(true)
+		expect(line.getAttribute('aria-expanded')).toBe('true')
+		line.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+		expect(line.classList.contains(styles.expandedText)).toBe(false)
+	})
+
+	it('renders transient thinking as a bottom activity card instead of header text', () => {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panels.push(panel)
+		agent.dispatchEvent(new CustomEvent('activity', { detail: { type: 'thinking' } }))
+
+		const wrapper = panel.wrapper
+		const activity = wrapper.querySelector(`.${styles.activitySection}`)!
+		expect(activity.classList.contains(styles.hidden)).toBe(false)
+		expect(activity.textContent).toContain('Thinking...')
+		expect(wrapper.querySelector(`.${styles.statusText}`)?.textContent).toBe('Ready')
+	})
+
+	it('renders a separate result card after a completed done action', () => {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panels.push(panel)
+		agent.task = 'inspect profile'
+		agent.history = [
+			{
+				type: 'step',
+				stepIndex: 2,
+				action: {
+					name: 'done',
+					input: { text: '当前登录用户如下：\n- **用户名**: admin', success: true },
+					output: 'Task completed',
+				},
+			},
+		]
+		agent.lastResult = { success: true, data: '当前登录用户如下：\n- **用户名**: admin' }
+		agent.dispatchEvent(new Event('historychange'))
+		agent.setStatus('completed')
+
+		const result = panel.wrapper.querySelector(`.${styles.doneSuccess}`)!
+		expect(result.textContent).toContain('Result: Success')
+		expect(result.textContent).toContain('当前登录用户如下：')
+		expect(result.querySelector(`.${styles.resultContent} strong`)?.textContent).toBe('用户名')
+	})
+
+	it('does not carry a completed result card into a reset session', () => {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panels.push(panel)
+		agent.task = 'inspect profile'
+		agent.history = [
+			{
+				type: 'step',
+				stepIndex: 0,
+				action: {
+					name: 'done',
+					input: { text: 'finished', success: true },
+					output: 'Task completed',
+				},
+			},
+		]
+		agent.lastResult = { success: true, data: 'finished' }
+		agent.setStatus('completed')
+		expect(panel.wrapper.querySelector(`.${styles.doneSuccess}`)).not.toBeNull()
+
+		panel.close()
+		panel.wrapper.querySelector(`.${styles.launcher}`)?.dispatchEvent(new Event('click'))
+		expect(panel.wrapper.querySelector(`.${styles.doneSuccess}`)).toBeNull()
 	})
 })
 
