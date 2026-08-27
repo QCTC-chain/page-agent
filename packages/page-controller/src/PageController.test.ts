@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { PageController } from './PageController'
-import { hoverElement } from './actions'
+import { clickElement, hoverElement } from './actions'
 
 /**
  * happy-dom has no layout engine: offsetWidth/Height are 0 and
@@ -212,6 +212,121 @@ describe('PageController', () => {
 				const result = await controller.clickElement(0)
 
 				expect(result.success).toBe(true)
+			})
+		})
+
+		// Reproduces the intermittent bug source: a synthetic click on such a
+		// link lands on the hit-tested INNER child and bubbles up, activating
+		// the ancestor link whenever transient user activation happens to be
+		// available — opening a real untracked tab behind the agent's back.
+		it('blocks target=_blank links even when the hit target is an inner child', async () => {
+			const original = {
+				offsetWidth: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth'),
+				offsetHeight: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight'),
+				rect: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'getBoundingClientRect'),
+				elementFromPoint: Object.getOwnPropertyDescriptor(Document.prototype, 'elementFromPoint'),
+			}
+			try {
+				Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+					configurable: true,
+					get: () => 100,
+				})
+				Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+					configurable: true,
+					get: () => 20,
+				})
+				Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+					configurable: true,
+					value: function (this: HTMLElement) {
+						return {
+							left: 0,
+							top: 0,
+							right: 100,
+							bottom: 20,
+							width: 100,
+							height: 20,
+							x: 0,
+							y: 0,
+							toJSON() {},
+						}
+					},
+				})
+				// Force the hit-test to resolve to the SPAN, simulating a real
+				// browser picking the deepest element under the pointer.
+				Object.defineProperty(Document.prototype, 'elementFromPoint', {
+					configurable: true,
+					value: function (this: Document) {
+						return this.querySelector('span')
+					},
+				})
+
+				document.body.innerHTML = `<a id="ext" href="/energy" target="_blank"><span>Energy</span></a>`
+
+				// Drive the actions layer directly with the SPAN as the click
+				// target — exactly what the hit-test produces for such links.
+				// PageController's pre-guard cannot catch this case (the indexed
+				// element here would be the span's ANCESTOR, so only the capture
+				// veto in clickElement can see the bubbled activation).
+				const span = document.querySelector('span')!
+				let appHandlerSawClick: boolean | null = null
+				span.addEventListener('click', (event) => {
+					appHandlerSawClick = event.defaultPrevented
+				})
+
+				const attempts = await clickElement(span)
+
+				expect(attempts).toEqual([{ url: '/energy', via: 'link_target_blank' }])
+				// The capture-phase veto runs BEFORE app handlers and cancels only
+				// the default navigation — handlers still observe the click.
+				expect(appHandlerSawClick).toBe(true)
+			} finally {
+				for (const [key, descriptor] of Object.entries(original)) {
+					const target = key === 'elementFromPoint' ? Document.prototype : HTMLElement.prototype
+					if (descriptor) Object.defineProperty(target, key, descriptor)
+				}
+			}
+		})
+
+		it('intercepts window.open from click handlers and reports the attempted URL', async () => {
+			await withLayoutPatched(async () => {
+				document.body.innerHTML = `<button>API docs</button>`
+				let handlerRan = false
+				document.querySelector('button')!.addEventListener('click', () => {
+					handlerRan = true
+					window.open('/api-docs', '_blank')
+				})
+				const originalOpen = window.open
+
+				const controller = new PageController()
+				await controller.updateTree()
+				const result = await controller.clickElement(0)
+
+				expect(result.success).toBe(false)
+				expect(result.message).toContain('/api-docs')
+				expect(result.message).toContain('open_new_tab')
+				// Application handlers still run; only the popup itself is vetoed.
+				expect(handlerRan).toBe(true)
+				// The temporary window.open wrapper must always be removed.
+				expect(window.open).toBe(originalOpen)
+			})
+		})
+
+		it('vetoes form target=_blank submissions triggered by a click', async () => {
+			await withLayoutPatched(async () => {
+				document.body.innerHTML = `<form action="/export" target="_blank"><button>Export</button></form>`
+				let submitFired = false
+				document.querySelector('form')!.addEventListener('submit', () => {
+					submitFired = true
+				})
+
+				const form = document.querySelector('form')!
+				const button = document.querySelector('button')!
+				const attempts = await clickElement(button)
+
+				expect(attempts).toEqual([{ url: '/export', via: 'form_target_blank' }])
+				// Default action cancelled: no implicit submission happens.
+				expect(submitFired).toBe(false)
+				expect(form.getAttribute('target')).toBe('_blank')
 			})
 		})
 	})

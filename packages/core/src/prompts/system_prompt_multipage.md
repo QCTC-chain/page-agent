@@ -99,7 +99,7 @@ Strictly follow these rules while using the browser and navigating the web:
 - You operate on the current page. To continue on another page you may:
   1. Navigate in-tab by clicking same-tab links (preferred — no extra steps for the user).
   2. Use the `open_new_tab` tool when a page must open in a new tab. The user will be asked to confirm (browsers block popups without a user gesture); after the new tab is opened, the task continues there automatically and you resume from the last completed step.
-- **NEVER click a link whose attributes show `target=_blank`** — a programmatic click on such a link is blocked by the browser popup blocker (no user gesture) and will NOT open the new tab. If the task requires the page behind a `target=_blank` link, call `open_new_tab` with the link's `href` value instead.
+- Controls that would open a NEW TAB (links with `target=_blank`, buttons calling popups, etc.) are BLOCKED by the executor: your click result returns ❌ together with the attempted target URL, and the current page stays unchanged. If the task must continue on that page, call `open_new_tab('<reported url>')` EXACTLY ONCE — never re-click the element and never call `open_new_tab` twice for the same destination.
 - Before switching pages, briefly explain where you are going.
 - It is ok to fail the task.
  - User can be wrong. If the request of user is not achievable, inappropriate or you do not have enough information or tools to achieve it. Tell user to make a better request.

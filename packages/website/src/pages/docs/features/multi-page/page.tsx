@@ -135,6 +135,11 @@ export default function MultiPage() {
 						</li>
 						<li>
 							{isZh
+								? '点击触发的新标签页行为（window.open、target=_blank 链接/表单）会被执行器确定性拦截，并向模型反馈尝试的 URL：浏览器能否真弹出取决于残留的用户手势，跨页跳转统一走 open_new_tab 交接流程。'
+								: 'New-tab side effects of clicks (window.open, target=_blank links/forms) are intercepted deterministically by the executor and reported to the model with the attempted URL; whether the browser would actually allow them depends on leftover transient user activation, so all cross-tab movement goes through the open_new_tab handoff flow.'}
+						</li>
+						<li>
+							{isZh
 								? '同一任务同时只应有一个活跃宿主；手动打开第二个同源页面会显示“继续任务”卡片而不会自动抢占运行中的任务。'
 								: 'Only one active host per task; manually opening a second same-origin page shows a "continue task?" card and never auto-steals a running task.'}
 						</li>

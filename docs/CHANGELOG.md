@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Duplicate new-tab prompts after click-triggered popups** - Clicks can no longer silently open an untracked tab behind the agent's back: during every click sequence, `window.open` calls and bubbled activation of `target="_blank"` links / forms are intercepted deterministically, and the click result reports ❌ with the attempted URL plus an instruction to call `open_new_tab` exactly once. Previously, whether such a click really opened a tab depended on leftover transient user activation, so the model sometimes kept operating on the stale page and then asked the user to open the same page again.
+
 ### Features
 
 - **Hover support** - Added a `hover_element_by_index` action/tool that dispatches the hover event sequence (pointer/mouse move, over, enter) without clicking, revealing JS-triggered menus, flyout submenus, popovers and tooltips (e.g. sidebar items that expand a submenu on hover). The agent prompt now prefers hovering over clicking for such elements, falling back to a click when nothing appears.

@@ -55,17 +55,178 @@ function blurLastClickedElement() {
 }
 
 /**
+ * How an attempt to open a new browsing context was detected.
+ * - `window.open`: the page's JS called window.open during the click sequence
+ *   (button/menu handlers are the common case).
+ * - `link_target_blank`: the click would activate an <a>/<area target="_blank">
+ *   anywhere along the clicked element's ancestor chain.
+ * - `form_target_blank`: the click would submit a <form target="_blank">.
+ */
+export type NewTabTrigger = 'window.open' | 'link_target_blank' | 'form_target_blank'
+
+/** One intercepted attempt to open a new browsing context during a click. */
+export interface NewTabAttempt {
+	/** Target URL when known (window.open argument / link href / form action); null otherwise. */
+	url: string | null
+	/** Detection mechanism. */
+	via: NewTabTrigger
+}
+
+/**
+ * Handle set up around one click sequence.
+ * Members are closure-backed functions owned by interceptNewContextOpening;
+ * always call them through the handle (never detach), see dispose contract.
+ */
+interface NewContextInterception {
+	/** Attempts recorded so far (defensive copy). */
+	getAttempts(): NewTabAttempt[]
+	/** Restore window.open and remove the capture listener. Idempotent. */
+	dispose(): void
+}
+
+/**
+ * Deterministically veto every way a synthetic click could open a new browsing
+ * context, and record what was attempted so the caller can report it back to
+ * the model.
+ *
+ * Why this exists: whether the browser actually honors a programmatic
+ * window.open / target=_blank navigation depends on leftover transient user
+ * activation — i.e. sometimes a "foreign" tab really opens while the agent
+ * keeps running on the stale page. The model cannot see that and then asks the
+ * user to open the same page again via open_new_tab. Blocking at the execution
+ * layer makes cross-tab movement observable and deterministic: it either goes
+ * through the open_new_tab handoff flow, or it does not happen.
+ *
+ * Two mechanisms, covering different entry points:
+ * 1. Wrap `window.open` on the element's own window: record the attempted URL,
+ *    return null (same contract as a popup-blocked call).
+ * 2. A document-level CAPTURE-phase click listener that preventDefaults clicks
+ *    whose target chain reaches an <a>/<area>/<form> with target="_blank".
+ *    Capture placement vetoes the default activation action regardless of
+ *    which descendant was actually dispatched (the hit-tested innermost child
+ *    bubbles up to its clickable ancestor), while application click handlers
+ *    still run normally — only the default navigation/submission is cancelled.
+ *
+ * Known limitation (accepted): `form.submit()` called programmatically from a
+ * deferred timer cannot be intercepted without monkey-patching prototypes,
+ * which is out of scope here. Such submissions are rare in practice.
+ *
+ * MUST be disposed by the caller; never left installed across tool calls.
+ */
+function interceptNewContextOpening(element: HTMLElement): NewContextInterception {
+	const view: Window = element.ownerDocument.defaultView ?? window
+	const doc = element.ownerDocument
+	const attempts: NewTabAttempt[] = []
+
+	// --- 1. window.open on the element's own window (iframe-safe) ---
+	// Captured and restored VERBATIM: dispose() writes this exact reference back
+	// via defineProperty (tests assert restoration fidelity by identity), and it
+	// is only ever invoked as view.open(...), so separation-of-`this` risk moot.
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const originalOpen = view.open
+	let openPatched = false
+	// Mirror the standard window.open signature exactly, so page callers keep
+	// working when they forward extra arguments.
+	const patchedOpen = function (
+		this: Window,
+		url?: string | URL,
+		_target?: string,
+		_features?: string
+	): Window | null {
+		attempts.push({ url: url == null ? null : String(url), via: 'window.open' })
+		// Same return contract as a browser popup-blocker hit: callers routinely
+		// handle null ("popup blocked") — far more predictable than letting a
+		// transient-activation-dependent real window through.
+		return null
+	}
+	try {
+		Object.defineProperty(view, 'open', {
+			value: patchedOpen,
+			writable: true,
+			configurable: true,
+		})
+		openPatched = true
+	} catch {
+		// Some environments expose window.open as accessor-only; navigation veto
+		// below still covers target=_blank links/forms in that case.
+	}
+
+	// --- 2. Veto default activation of target="_blank" links/forms ---
+	const vetoNewContextActivation = (event: Event): void => {
+		let node = event.target as Element | null
+		while (node && node.nodeType === 1) {
+			if ((node as Element).getAttribute('target') === '_blank') {
+				const el = node as Element
+				if (el.tagName === 'A' || el.tagName === 'AREA') {
+					event.preventDefault()
+					attempts.push({ url: el.getAttribute('href'), via: 'link_target_blank' })
+					return
+				}
+				if (el.tagName === 'FORM') {
+					event.preventDefault()
+					attempts.push({ url: el.getAttribute('action'), via: 'form_target_blank' })
+					return
+				}
+			}
+			node = node.parentElement
+		}
+	}
+	doc.addEventListener('click', vetoNewContextActivation, true)
+
+	let disposed = false
+	return {
+		getAttempts: (): NewTabAttempt[] => [...attempts],
+		dispose(): void {
+			if (disposed) return
+			disposed = true
+			doc.removeEventListener('click', vetoNewContextActivation, true)
+			if (openPatched) {
+				try {
+					Object.defineProperty(view, 'open', {
+						value: originalOpen,
+						writable: true,
+						configurable: true,
+					})
+				} catch {
+					// Restoration cannot realistically fail after a successful patch;
+					// kept non-throwing to guarantee the finally block completes.
+				}
+			}
+		},
+	}
+}
+
+/**
  * Simulate a full click following W3C Pointer Events + UI Events spec order:
  * pointerover/enter → mouseover/enter → pointerdown → mousedown → [focus] →
  * pointerup → mouseup → click
  *
+ * Any attempt by the page to open a NEW browsing context during the sequence
+ * (window.open, target="_blank" link or form) is intercepted deterministically;
+ * the returned list lets the caller explain that refusal to the model instead
+ * of leaving an invisible side effect behind.
+ *
+ * @returns Attempts intercepted during the click sequence (empty when none).
  * @private Internal method, subject to change at any time.
  */
-export async function clickElement(element: HTMLElement) {
+export async function clickElement(element: HTMLElement): Promise<NewTabAttempt[]> {
 	blurLastClickedElement()
 
 	lastClickedElement = element
 
+	const interception = interceptNewContextOpening(element)
+	try {
+		await performClickSequence(element)
+		// Read AFTER the sequence but BEFORE dispose — same lifetime as before,
+		// fetched via the handle so no method reference is ever detached.
+		return interception.getAttempts()
+	} finally {
+		interception.dispose()
+	}
+}
+
+/** Body of the click sequence, split out so clickElement owns setup/teardown. */
+async function performClickSequence(element: HTMLElement): Promise<void> {
 	await scrollIntoViewIfNeeded(element)
 	const frame = element.ownerDocument.defaultView?.frameElement
 	if (frame) await scrollIntoViewIfNeeded(frame)

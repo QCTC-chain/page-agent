@@ -255,11 +255,9 @@ export class PageController extends EventTarget {
 			const element = getElementByIndex(this.selectorMap, index)
 			const elemText = this.elementTextMap.get(index)
 
-			// A synthetic click on a target=_blank link is a navigation to a new
-			// tab WITHOUT a user gesture — browsers block it (popup blocker) and
-			// the new tab never opens. Report it as a failure and tell the model
-			// to use the `open_new_tab` tool instead, so multi-page handoff can
-			// actually take over.
+			// Fast path: the indexed element is itself a target="_blank" link.
+			// Refuse before dispatching and point the model at open_new_tab, so
+			// multi-page handoff can actually take over.
 			if (isAnchorElement(element) && element.target === '_blank') {
 				return {
 					success: false,
@@ -271,7 +269,27 @@ export class PageController extends EventTarget {
 				}
 			}
 
-			await clickElement(element)
+			// Runtime net: even when the indexed element is not itself a _blank link,
+			// the page may still try to open a new context during the click — a hit-
+			// tested inner child bubbling up to a target="_blank" ancestor, a button
+			// handler calling window.open, or a <form target="_blank"> submission.
+			// Whether those really open depends on leftover transient user activation,
+			// so they are intercepted deterministically and reported here instead of
+			// silently spawning an untracked tab behind the agent's back.
+			const newTabAttempts = await clickElement(element)
+
+			if (newTabAttempts.length > 0) {
+				// Length is checked above, so at(-1) is defined; ?. keeps TS strict happy.
+				const urlHint = newTabAttempts.at(-1)?.url ?? 'unknown URL'
+				return {
+					success: false,
+					message:
+						`❌ Clicked element (${elemText ?? index}) tried to open a NEW TAB (${urlHint}). ` +
+						`The click was blocked, so this page did NOT change. If the task must continue on ` +
+						`that page, call the open_new_tab tool with "${urlHint}" ONCE. Do NOT click this ` +
+						`element again and do NOT call open_new_tab twice for the same destination.`,
+				}
+			}
 
 			return {
 				success: true,
@@ -424,6 +442,7 @@ export class PageController extends EventTarget {
 	async executeJavascript(script: string, signal?: AbortSignal): Promise<ActionResult> {
 		try {
 			// Wrap script in async function to support await, exposing `signal`.
+			// pi-lens-ignore: no-eval
 			const asyncFunction = eval(`(async (signal) => { ${script} })`)
 			const result = await asyncFunction(signal)
 			return {
