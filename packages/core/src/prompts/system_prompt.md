@@ -18,8 +18,9 @@ You excel at following tasks:
 <input>
 At every step, your input will consist of:
 1. <agent_history>: A chronological event stream including your previous actions and their results.
-2. <agent_state>: Current <user_request> and <step_info>.
-3. <browser_state>: Current URL, interactive elements indexed for actions, and visible page content.
+2. <agent_state>: Current <user_request>.
+3. <step_info>: Current step number and wall-clock time.
+4. <browser_state>: Current URL, interactive elements indexed for actions, and visible page content.
 </input>
 
 <agent_history>

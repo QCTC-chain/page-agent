@@ -117,11 +117,20 @@ export class PageAgentCore extends EventTarget {
 		lastTabId: number | undefined
 		/** Browser state */
 		browserState: BrowserState | null
+		/** Simplified content of the last FULL snapshot sent to the LLM (dedupe baseline) */
+		lastBrowserContent: string | null
+		/** Whether the current snapshot is identical to the last full one (dedupe) */
+		browserStateUnchanged: boolean
+		/** 0-based step index whose prompt last carried the full snapshot (dedupe) */
+		lastFullBrowserStateStep: number
 	} = {
 		totalWaitTime: 0,
 		lastURL: '',
 		lastTabId: undefined,
 		browserState: null,
+		lastBrowserContent: null,
+		browserStateUnchanged: false,
+		lastFullBrowserStateStep: 0,
 	}
 
 	constructor(config: PageAgentCoreConfig) {
@@ -251,7 +260,15 @@ export class PageAgentCore extends EventTarget {
 
 		this.history = options.initialHistory ? [...options.initialHistory] : []
 		this.#observations = []
-		this.#states = { totalWaitTime: 0, lastURL: '', lastTabId: undefined, browserState: null }
+		this.#states = {
+			totalWaitTime: 0,
+			lastURL: '',
+			lastTabId: undefined,
+			browserState: null,
+			lastBrowserContent: null,
+			browserStateUnchanged: false,
+			lastFullBrowserStateStep: 0,
+		}
 		this.#abortController = new AbortController()
 		const signal = this.#abortController.signal
 
@@ -299,6 +316,24 @@ export class PageAgentCore extends EventTarget {
 					console.log(chalk.blue.bold('👀 Observing...'))
 
 					this.#states.browserState = await this.pageController.getBrowserState()
+
+					// Detect an unchanged snapshot so the prompt can use a short placeholder
+					// instead of re-sending the full DOM (see `dedupeUnchangedBrowserState`).
+					// NOTE: `#states.lastURL` still holds the PREVIOUS step's URL here —
+					// `#handleObservations` updates it afterwards.
+					if (this.config.dedupeUnchangedBrowserState) {
+						const content = this.#states.browserState.content
+						const unchanged =
+							this.#states.lastBrowserContent !== null &&
+							content === this.#states.lastBrowserContent &&
+							this.#states.lastURL === (this.#states.browserState.url || '')
+						this.#states.browserStateUnchanged = unchanged
+						if (!unchanged) {
+							this.#states.lastBrowserContent = content
+							this.#states.lastFullBrowserStateStep = step
+						}
+					}
+
 					await this.#handleObservations(step)
 
 					// assemble prompts
@@ -651,8 +686,12 @@ export class PageAgentCore extends EventTarget {
 
 		// <agent_state>
 		//  - <user_request>
-		//  - <step_info>
-		// <agent_state>
+		// NOTE: <step_info> (step number + current time) is intentionally emitted
+		// AFTER <agent_history>, not inside <agent_state>. Both fields change on
+		// every step; keeping them before the append-only history would invalidate
+		// the prompt prefix cache at that point and force a full re-prefill of the
+		// growing history on every step.
+		// <agent_state> / <step_info> / <agent_history>
 
 		const stepCount = this.history.filter((e) => e.type === 'step').length
 
@@ -660,10 +699,6 @@ export class PageAgentCore extends EventTarget {
 		prompt += '<user_request>\n'
 		prompt += `${this.task}\n`
 		prompt += '</user_request>\n'
-		prompt += '<step_info>\n'
-		prompt += `Step ${stepCount + 1} of ${this.config.maxSteps} max possible steps\n`
-		prompt += `Current time: ${new Date().toLocaleString()}\n`
-		prompt += '</step_info>\n'
 		prompt += '</agent_state>\n\n'
 
 		// <agent_history>
@@ -672,10 +707,26 @@ export class PageAgentCore extends EventTarget {
 
 		prompt += '<agent_history>\n'
 
+		// LLM-view windowing (LLM/UI view separation): only the most recent
+		// `maxStepEvents` step events are rendered; earlier steps are replaced by a
+		// one-line compaction marker. `this.history` itself stays complete for the
+		// UI — windowing affects only what the model sees.
+		const maxStepEvents = this.config.historyView?.maxStepEvents
+		const totalStepEvents = maxStepEvents ? this.history.filter((e) => e.type === 'step').length : 0
+		const skipStepEvents = maxStepEvents ? Math.max(0, totalStepEvents - maxStepEvents) : 0
+		let skippedEmitted = false
+
 		let stepIndex = 0
 		for (const event of this.history) {
 			if (event.type === 'step') {
 				stepIndex++
+				if (stepIndex <= skipStepEvents) continue
+				if (skipStepEvents > 0 && !skippedEmitted) {
+					skippedEmitted = true
+					prompt +=
+						`<sys>History compacted: the earliest ${skipStepEvents} step(s) are not shown. ` +
+						`Their progress is summarized in the Memory fields below.</sys>\n`
+				}
 				prompt += `<step_${stepIndex}>\n`
 				prompt += `Evaluation of Previous Step: ${event.reflection.evaluation_previous_goal}\n`
 				prompt += `Memory: ${event.reflection.memory}\n`
@@ -694,11 +745,29 @@ export class PageAgentCore extends EventTarget {
 
 		prompt += '</agent_history>\n\n'
 
+		// <step_info> — volatile per-step fields, placed after the append-only
+		// <agent_history> so upstream prefix caches can cover system + instructions
+		// + agent_state + history across steps.
+		prompt += '<step_info>\n'
+		prompt += `Step ${stepCount + 1} of ${this.config.maxSteps} max possible steps\n`
+		prompt += `Current time: ${new Date().toLocaleString()}\n`
+		prompt += '</step_info>\n\n'
+
 		// <browser_state>
 
 		let pageContent = browserState.content
 		if (this.config.transformPageContent) {
 			pageContent = await this.config.transformPageContent(pageContent)
+		}
+
+		// Unchanged-page placeholder: the snapshot is byte-identical to the one the
+		// model already saw (same URL), so re-sending it would only cost tokens.
+		// Element indexes from that snapshot remain valid because the page is unchanged.
+		if (this.#states.browserStateUnchanged) {
+			pageContent =
+				`[browser_state unchanged since step ${this.#states.lastFullBrowserStateStep + 1}: ` +
+				`identical to the previously observed snapshot. ` +
+				`All listed elements and their indexes remain valid.]`
 		}
 
 		prompt += '<browser_state>\n'

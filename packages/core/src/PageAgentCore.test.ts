@@ -556,3 +556,142 @@ describe.concurrent('PageAgentCore lifecycle', () => {
 		})
 	})
 })
+
+describe.concurrent('context governance (prompt layout, history window, snapshot dedupe)', () => {
+	// The default `wait` tool really sleeps for its `seconds` argument, which
+	// would blow past the test timeout; every test here uses an instant override.
+	const instantWait = tool({
+		description: 'instant wait for tests',
+		inputSchema: z.object({ seconds: z.number() }),
+		execute: async () => '✅ Waited.',
+	})
+
+	function userPromptOf(fetchMock: ReturnType<typeof createFetchMock>, callIndex: number): string {
+		const init = fetchMock.mock.calls[callIndex][1] as { body: string }
+		const body = JSON.parse(init.body) as { messages: { content: string }[] }
+		return body.messages[1].content
+	}
+
+	it('places <step_info> after <agent_history> and keeps the pre-history prefix append-only', async () => {
+		const fetchMock = createFetchMock()
+			.mockResolvedValueOnce(waitResponse())
+			.mockResolvedValueOnce(doneResponse('all done'))
+		const agent = createAgent(fetchMock, { customTools: { wait: instantWait } })
+		await agent.execute('cache layout')
+
+		expect(fetchMock).toHaveBeenCalledTimes(2)
+		const prompt1 = userPromptOf(fetchMock, 0)
+		const prompt2 = userPromptOf(fetchMock, 1)
+
+		for (const prompt of [prompt1, prompt2]) {
+			// Volatile per-step fields must come AFTER the append-only history,
+			// so prefix caches stay valid from system prompt through history.
+			const historyEnd = prompt.indexOf('</agent_history>')
+			const stepInfoStart = prompt.indexOf('<step_info>')
+			expect(stepInfoStart).toBeGreaterThan(historyEnd)
+			// <agent_state> carries only the stable user request.
+			const stateSection = prompt.slice(
+				prompt.indexOf('<agent_state>'),
+				prompt.indexOf('</agent_state>')
+			)
+			expect(stateSection).not.toContain('Current time')
+			expect(stateSection).not.toMatch(/Step \d+ of/)
+		}
+
+		// Cacheability property: prompt N+1 starts with the exact pre-history
+		// prefix of prompt N (instructions + agent_state + all previous steps).
+		const prefix1 = prompt1.slice(0, prompt1.indexOf('</agent_history>'))
+		const prefix2 = prompt2.slice(0, prompt2.indexOf('</agent_history>'))
+		expect(prefix2.startsWith(prefix1)).toBe(true)
+		expect(prefix2.length).toBeGreaterThan(prefix1.length)
+	})
+
+	it('historyView windows the LLM view while agent.history stays complete', async () => {
+		// 4 waits + done: the 5th prompt is planned with 4 step events in history,
+		// so maxStepEvents=2 keeps the last 2 and compacts the earliest 2.
+		const fetchMock = createFetchMock()
+			.mockResolvedValueOnce(waitResponse())
+			.mockResolvedValueOnce(waitResponse())
+			.mockResolvedValueOnce(waitResponse())
+			.mockResolvedValueOnce(waitResponse())
+			.mockResolvedValueOnce(doneResponse('all done'))
+		const agent = createAgent(fetchMock, {
+			historyView: { maxStepEvents: 2 },
+			customTools: { wait: instantWait },
+		})
+		await agent.execute('window history')
+
+		const lastPrompt = userPromptOf(fetchMock, 4)
+		const stepBlocks = lastPrompt.match(/<step_\d+>/g) ?? []
+		expect(stepBlocks).toHaveLength(2)
+		expect(lastPrompt).toContain('<sys>History compacted: the earliest 2 step(s)')
+		// UI/debug/migration view is untouched: all five steps are kept.
+		expect(agent.history.filter((e) => e.type === 'step')).toHaveLength(5)
+	})
+
+	it('dedupeUnchangedBrowserState replaces identical snapshots with a placeholder', async () => {
+		const stateA: BrowserState = {
+			url: 'https://example.test/',
+			title: 'Test page',
+			header: '',
+			content: 'CONTENT-A',
+			footer: '',
+		}
+		const stateB: BrowserState = { ...stateA, content: 'CONTENT-B' }
+		const states = [stateA, stateA, stateB]
+		const pageController = createPageController()
+		const mockGetBrowserState = vi.fn(async () => states.shift()! as BrowserState)
+		;(
+			pageController as unknown as { getBrowserState: typeof mockGetBrowserState }
+		).getBrowserState = mockGetBrowserState
+
+		const fetchMock = createFetchMock()
+			.mockResolvedValueOnce(waitResponse())
+			.mockResolvedValueOnce(waitResponse())
+			.mockResolvedValueOnce(doneResponse('all done'))
+		const agent = createAgent(fetchMock, {
+			pageController,
+			dedupeUnchangedBrowserState: true,
+			customTools: { wait: instantWait },
+		})
+		await agent.execute('dedupe snapshots')
+
+		const prompt1 = userPromptOf(fetchMock, 0)
+		const prompt2 = userPromptOf(fetchMock, 1)
+		const prompt3 = userPromptOf(fetchMock, 2)
+
+		expect(prompt1).toContain('CONTENT-A')
+		// Same content + same URL → placeholder instead of the full snapshot.
+		expect(prompt2).toContain('[browser_state unchanged since step 1')
+		expect(prompt2).not.toContain('CONTENT-A')
+		// Changed content → full snapshot again, no placeholder.
+		expect(prompt3).toContain('CONTENT-B')
+		expect(prompt3).not.toContain('[browser_state unchanged')
+	})
+
+	it('keeps full snapshots by default (dedupeUnchangedBrowserState off)', async () => {
+		const state: BrowserState = {
+			url: 'https://example.test/',
+			title: 'Test page',
+			header: '',
+			content: 'CONTENT-A',
+			footer: '',
+		}
+		const pageController = createPageController()
+		const mockGetBrowserState = vi.fn(async () => state)
+		;(
+			pageController as unknown as { getBrowserState: typeof mockGetBrowserState }
+		).getBrowserState = mockGetBrowserState
+
+		const fetchMock = createFetchMock()
+			.mockResolvedValueOnce(waitResponse())
+			.mockResolvedValueOnce(doneResponse('all done'))
+		const agent = createAgent(fetchMock, {
+			pageController,
+			customTools: { wait: instantWait },
+		})
+		await agent.execute('no dedupe')
+
+		expect(userPromptOf(fetchMock, 1)).toContain('CONTENT-A')
+	})
+})
