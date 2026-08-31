@@ -182,20 +182,48 @@ function safeJsonParse(input: any): any {
 }
 
 /**
- * Extract and parse JSON from a string.
- * - Treat content between the first `{` and the last `}` as JSON.
- * - Try to parse that content as JSON and return the parsed value (object/array/primitive) if successful, otherwise return null.
+ * Extract and parse the first balanced JSON object from a string.
+ *
+ * Uses a string-aware brace-depth scan instead of a greedy "first `{` to last
+ * `}`" regex, so trailing garbage AFTER the object (e.g. a stray backtick and
+ * an over-closed `}` emitted by the model after a complete JSON object) no
+ * longer corrupts the extraction: the scan stops at the `}` that balances the
+ * opening `{`, ignoring braces inside JSON string literals.
+ *
+ * @param str - Raw LLM message content, possibly with prose or code fences.
+ * @returns The parsed value of the first balanced `{...}` block, or null when
+ *          no balanced JSON object is found.
  */
 function retrieveJsonFromString(str: string): any {
-	try {
-		const json = /({[\s\S]*})/.exec(str) ?? []
-		if (json.length === 0) {
-			return null
+	const start = str.indexOf('{')
+	if (start === -1) return null
+	let depth = 0
+	let inString = false
+	let escaped = false
+	for (let i = start; i < str.length; i++) {
+		const char = str[i]
+		if (inString) {
+			if (escaped) escaped = false
+			else if (char === '\\') escaped = true
+			else if (char === '"') inString = false
+			continue
 		}
-		return JSON.parse(json[0]!)
-	} catch {
-		return null
+		if (char === '"') {
+			inString = true
+		} else if (char === '{') {
+			depth++
+		} else if (char === '}') {
+			depth--
+			if (depth === 0) {
+				try {
+					return JSON.parse(str.slice(start, i + 1))
+				} catch {
+					return null
+				}
+			}
+		}
 	}
+	return null
 }
 
 interface Choice {
