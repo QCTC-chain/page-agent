@@ -12,6 +12,7 @@ import { PageAgentCore } from '@page-agent/core'
 import { PageController } from '@page-agent/page-controller'
 
 import { PageAgent, type PageAgentConfig } from './PageAgent'
+import { type EmbedPerfParams, attachPerfTelemetry, parseEmbedPerfParams } from './embed-perf'
 
 const currentScript = document.currentScript as HTMLScriptElement | null
 let currentScriptURL: URL | null = null
@@ -42,10 +43,16 @@ const DEMO_BASE_URL = 'https://page-ag-testing-ohftxirgbn.cn-shanghai.fcapp.run'
 const DEMO_API_KEY = 'NA'
 
 // in case document.x is not ready yet
+// NOTE: perf telemetry attaches inside the init timeout below so it observes
+// every task of the auto-initialized agent (console.info + `page-agent:perf`
+// CustomEvents on window).
 if (autoInit) {
 	setTimeout(() => {
 		let config: PageAgentConfig
 		let showPanel = true
+		// Context-governance params, parsed once from the embed URL (null when
+		// document.currentScript is unavailable — defaults then apply).
+		let perf: EmbedPerfParams | null = null
 
 		if (currentScriptURL) {
 			const url = currentScriptURL
@@ -59,7 +66,22 @@ if (autoInit) {
 			// Mask defaults to enabled (PageAgent behavior); pass enableMask=false to disable.
 			const enableMask = url.searchParams.get('enableMask') !== 'false'
 			showPanel = ((url.searchParams.get('showPanel') as 'true' | 'false') || 'true') === 'true'
-			config = { model, baseURL, apiKey, language, position, enableMultiPage, enableMask }
+
+			// Context governance: bounded browser_state + windowed LLM history view
+			// (keeps the Panel timeline complete) + optional unchanged-page placeholder.
+			perf = parseEmbedPerfParams(url)
+			config = {
+				model,
+				baseURL,
+				apiKey,
+				language,
+				position,
+				enableMultiPage,
+				enableMask,
+				viewportExpansion: perf.viewportExpansion,
+				historyView: perf.historyView,
+				dedupeUnchangedBrowserState: perf.dedupeUnchangedBrowserState,
+			}
 		} else {
 			console.log('🚀 page-agent.js no current script detected, using default demo config')
 			config = {
@@ -71,6 +93,9 @@ if (autoInit) {
 
 		// Create agent
 		window.pageAgent = new PageAgent(config)
+		// Attach per-step usage telemetry (console + `page-agent:perf` CustomEvents)
+		// unless the embed explicitly disabled it via `telemetry=false`.
+		if (perf?.telemetryEnabled) attachPerfTelemetry(window.pageAgent)
 		if (showPanel) {
 			// Default entry is a floating launcher button; clicking it opens the
 			// conversation panel. Call panel.show() instead to open it directly.
