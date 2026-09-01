@@ -44,6 +44,16 @@
 			0 4px 14px rgba(29, 42, 68, 0.1);
 	}
 
+	&.panelDragging {
+		/* Disable transitions while dragging so the panel tracks the pointer 1:1
+		 * and the header shows a grabbing cursor. */
+		transition: none !important;
+		user-select: none;
+		.header {
+			cursor: grabbing;
+		}
+	}
+
 	&:not(.expanded) .historySectionWrapper,
 	&:not(.expanded) .inputSectionWrapper {
 		visibility: hidden;

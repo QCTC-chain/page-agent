@@ -610,6 +610,250 @@ describe('Panel launcher drag (repositionable icon)', () => {
 	})
 })
 
+describe('Panel position follows the launcher drag', () => {
+	const VIEW_W = 1280
+	const VIEW_H = 800
+	const LAUNCHER_SIZE = 76
+	const PANEL_W = 456
+	const panels: Panel[] = []
+
+	beforeEach(() => {
+		window.localStorage.clear()
+		Object.defineProperty(window, 'innerWidth', { value: VIEW_W, configurable: true })
+		Object.defineProperty(window, 'innerHeight', { value: VIEW_H, configurable: true })
+	})
+
+	afterEach(() => {
+		panels.splice(0).forEach((panel) => panel.dispose())
+		document.body.innerHTML = ''
+		vi.restoreAllMocks()
+		window.localStorage.clear()
+	})
+
+	function createWithLauncher(): { agent: FakeAgent; panel: Panel; launcher: HTMLElement } {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panel.close()
+		const launcher = document.getElementById(LAUNCHER_ID)!
+		panels.push(panel)
+		return { agent, panel, launcher }
+	}
+
+	function mockLauncherLayout(launcher: HTMLElement, left: number, top: number): void {
+		vi.spyOn(launcher, 'getBoundingClientRect').mockImplementation(() => {
+			const l = Number.parseFloat(launcher.style.left) || left
+			const t = Number.parseFloat(launcher.style.top) || top
+			return {
+				left: l,
+				top: t,
+				right: l + LAUNCHER_SIZE,
+				bottom: t + LAUNCHER_SIZE,
+				width: LAUNCHER_SIZE,
+				height: LAUNCHER_SIZE,
+				x: l,
+				y: t,
+				toJSON: () => ({}),
+			}
+		})
+	}
+
+	function dragLauncher(launcher: HTMLElement, from: [number, number], to: [number, number]): void {
+		const opts = { pointerId: 1, bubbles: true }
+		launcher.dispatchEvent(
+			new PointerEvent('pointerdown', {
+				...opts,
+				button: 0,
+				clientX: from[0],
+				clientY: from[1],
+			})
+		)
+		launcher.dispatchEvent(
+			new PointerEvent('pointermove', { ...opts, clientX: to[0], clientY: to[1] })
+		)
+		launcher.dispatchEvent(
+			new PointerEvent('pointerup', { ...opts, clientX: to[0], clientY: to[1] })
+		)
+	}
+
+	it('opens the minimized panel anchored to the dragged launcher position', () => {
+		const { panel, launcher } = createWithLauncher()
+		mockLauncherLayout(launcher, 20, 100)
+		dragLauncher(launcher, [20, 100], [120, 300])
+		// Provide the wrapper's measured width so the anchor can be clamped.
+		vi.spyOn(panel.wrapper, 'offsetWidth', 'get').mockReturnValue(PANEL_W)
+
+		panel.show()
+
+		// Collapsed height is 39px, so the minimized bar sits exactly at the anchor.
+		expect(panel.wrapper.style.left).toBe('120px')
+		expect(panel.wrapper.style.top).toBe('300px')
+		expect(panel.wrapper.style.right).toBe('auto')
+		expect(panel.wrapper.style.bottom).toBe('auto')
+	})
+
+	it('clamps an expanded panel on-screen when the anchor is near the bottom', () => {
+		const { panel, launcher } = createWithLauncher()
+		mockLauncherLayout(launcher, 20, VIEW_H - LAUNCHER_SIZE) // bottom-left icon
+		dragLauncher(launcher, [20, VIEW_H - LAUNCHER_SIZE], [40, VIEW_H - LAUNCHER_SIZE])
+		vi.spyOn(panel.wrapper, 'offsetWidth', 'get').mockReturnValue(PANEL_W)
+
+		panel.show()
+		panel.expand()
+
+		const expandedHeight = Math.min(780, VIEW_H - 32) // 768
+		expect(panel.wrapper.style.left).toBe('40px')
+		expect(panel.wrapper.style.top).toBe(`${VIEW_H - expandedHeight}px`)
+	})
+
+	it('reopens the launcher at the shared anchor after the panel was moved', () => {
+		const { panel, launcher } = createWithLauncher()
+		mockLauncherLayout(launcher, 20, 100)
+		dragLauncher(launcher, [20, 100], [120, 300])
+
+		// Without a wrapper size the panel stays unclamped, but the anchor is kept.
+		panel.show()
+		panel.close()
+
+		expect(launcher.style.left).toBe('120px')
+		expect(launcher.style.top).toBe('300px')
+	})
+})
+
+describe('Panel header drag (move the panel window)', () => {
+	const VIEW_W = 1280
+	const VIEW_H = 800
+	const PANEL_W = 456
+	const PANEL_H = 39
+	const panels: Panel[] = []
+
+	beforeEach(() => {
+		window.localStorage.clear()
+		Object.defineProperty(window, 'innerWidth', { value: VIEW_W, configurable: true })
+		Object.defineProperty(window, 'innerHeight', { value: VIEW_H, configurable: true })
+	})
+
+	afterEach(() => {
+		panels.splice(0).forEach((panel) => panel.dispose())
+		document.body.innerHTML = ''
+		vi.restoreAllMocks()
+		window.localStorage.clear()
+	})
+
+	function createVisiblePanel(): { agent: FakeAgent; panel: Panel } {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panel.show()
+		panels.push(panel)
+		return { agent, panel }
+	}
+
+	function mockPanelLayout(wrapper: HTMLElement, left: number, top: number): void {
+		vi.spyOn(wrapper, 'getBoundingClientRect').mockImplementation(() => {
+			const l = Number.parseFloat(wrapper.style.left) || left
+			const t = Number.parseFloat(wrapper.style.top) || top
+			return {
+				left: l,
+				top: t,
+				right: l + PANEL_W,
+				bottom: t + PANEL_H,
+				width: PANEL_W,
+				height: PANEL_H,
+				x: l,
+				y: t,
+				toJSON: () => ({}),
+			}
+		})
+	}
+
+	function dragHeader(panel: Panel, from: [number, number], to: [number, number]): void {
+		const header = panel.wrapper.querySelector(`.${styles.header}`)!
+		const opts = { pointerId: 1, bubbles: true }
+		header.dispatchEvent(
+			new PointerEvent('pointerdown', {
+				...opts,
+				button: 0,
+				clientX: from[0],
+				clientY: from[1],
+			})
+		)
+		header.dispatchEvent(
+			new PointerEvent('pointermove', { ...opts, clientX: to[0], clientY: to[1] })
+		)
+		header.dispatchEvent(new PointerEvent('pointerup', { ...opts, clientX: to[0], clientY: to[1] }))
+	}
+
+	it('drags the minimized panel to a new viewport position', () => {
+		const { panel } = createVisiblePanel()
+		mockPanelLayout(panel.wrapper, 300, 400)
+		dragHeader(panel, [300, 400], [520, 640])
+
+		expect(panel.wrapper.style.left).toBe('520px')
+		expect(panel.wrapper.style.top).toBe('640px')
+		expect(panel.wrapper.style.right).toBe('auto')
+		expect(panel.wrapper.style.bottom).toBe('auto')
+		expect(panel.wrapper.classList.contains(styles.panelDragging)).toBe(false)
+	})
+
+	it('clamps the panel inside the viewport while dragging', () => {
+		const { panel } = createVisiblePanel()
+		mockPanelLayout(panel.wrapper, 300, 400)
+		dragHeader(panel, [300, 400], [-5000, 5000])
+
+		expect(panel.wrapper.style.left).toBe('0px')
+		expect(panel.wrapper.style.top).toBe(`${VIEW_H - PANEL_H}px`)
+	})
+
+	it('moves the expanded panel as well (whole window drag)', () => {
+		const { panel } = createVisiblePanel()
+		panel.expand()
+		mockPanelLayout(panel.wrapper, 300, 400)
+		dragHeader(panel, [300, 400], [500, 200])
+
+		expect(panel.wrapper.style.left).toBe('500px')
+		expect(panel.wrapper.style.top).toBe('200px')
+		expect(panel.wrapper.classList.contains(styles.expanded)).toBe(true)
+	})
+
+	it('does not toggle expand/collapse when the panel is dragged', () => {
+		const { panel } = createVisiblePanel()
+		mockPanelLayout(panel.wrapper, 300, 400)
+		dragHeader(panel, [300, 400], [350, 400])
+		// Browsers fire a click after a drag (pointer capture retargets it); it
+		// must be swallowed so moving the window never toggles it.
+		panel.wrapper
+			.querySelector(`.${styles.header}`)!
+			.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+		expect(panel.wrapper.classList.contains(styles.expanded)).toBe(false)
+	})
+
+	it('toggles expand/collapse on a plain header click (no drag)', () => {
+		const { panel } = createVisiblePanel()
+		const header = panel.wrapper.querySelector<HTMLElement>(`.${styles.header}`)!
+
+		header.click()
+		expect(panel.wrapper.classList.contains(styles.expanded)).toBe(true)
+		header.click()
+		expect(panel.wrapper.classList.contains(styles.expanded)).toBe(false)
+	})
+
+	it('persists the dragged panel position and repositions the launcher on close', () => {
+		const { panel } = createVisiblePanel()
+		mockPanelLayout(panel.wrapper, 300, 400)
+		dragHeader(panel, [300, 400], [520, 640])
+
+		expect(JSON.parse(window.localStorage.getItem('page-agent:launcher-position')!)).toEqual({
+			left: 520,
+			top: 640,
+		})
+
+		panel.close()
+		const launcher = document.getElementById(LAUNCHER_ID)!
+		expect(launcher.style.left).toBe('520px')
+		expect(launcher.style.top).toBe('640px')
+	})
+})
+
 /** Close the panel first so the launcher exists in the DOM before external dispose */
 function wrapperHiddenState(): void {
 	const wrapper = document.getElementById(PANEL_ID)!

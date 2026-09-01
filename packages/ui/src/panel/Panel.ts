@@ -24,9 +24,10 @@ export interface PanelConfig {
 	 */
 	position?: 'bottom-center' | 'bottom-right'
 	/**
-	 * Whether the floating launcher icon can be dragged to any viewport position.
-	 * The chosen position is kept while the panel stays open/closed on the page
-	 * and (when storage is available) restored across reloads for the same origin.
+	 * Whether the floating launcher icon and the panel can be dragged to any
+	 * viewport position. The panel opens anchored to the launcher's position
+	 * and keeps it across open/close; (when storage is available) the position
+	 * is restored across reloads for the same origin.
 	 * @default true
 	 */
 	launcherDraggable?: boolean
@@ -90,6 +91,26 @@ export class Panel {
 	 * is never mistaken for a click that opens the panel.
 	 */
 	#suppressLauncherClick = false
+	/**
+	 * Shared floating anchor (top-left) for the launcher and the panel wrapper.
+	 * Set once the user drags either one; null keeps the default CSS placement.
+	 */
+	#floatingPosition: { left: number; top: number } | null = null
+	/** Active panel (header) drag state, or null when no drag is in progress. */
+	#panelDrag: {
+		pointerId: number
+		moved: boolean
+		startClientX: number
+		startClientY: number
+		originLeft: number
+		originTop: number
+	} | null = null
+	/**
+	 * True for the single click that follows a real panel drag, so the drag is
+	 * never mistaken for a click that toggles the panel between minimized and
+	 * expanded.
+	 */
+	#suppressHeaderClick = false
 	#userAnswerResolver: ((input: string) => void) | null = null
 	#isWaitingForUserAnswer: boolean = false
 	#showResultCard = false
@@ -106,6 +127,9 @@ export class Panel {
 	#onLauncherPointerDown = (e: PointerEvent) => this.#handleLauncherPointerDown(e)
 	#onLauncherPointerMove = (e: PointerEvent) => this.#handleLauncherPointerMove(e)
 	#onLauncherPointerEnd = (e: PointerEvent) => this.#handleLauncherPointerEnd(e)
+	#onHeaderPointerDown = (e: PointerEvent) => this.#handleHeaderPointerDown(e)
+	#onHeaderPointerMove = (e: PointerEvent) => this.#handleHeaderPointerMove(e)
+	#onHeaderPointerEnd = (e: PointerEvent) => this.#handleHeaderPointerEnd(e)
 	#onStatusChange = () => this.#handleStatusChange()
 	#onHistoryChange = () => this.#handleHistoryChange()
 	#onActivity = (e: Event) => this.#handleActivity((e as CustomEvent<AgentActivity>).detail)
@@ -330,18 +354,16 @@ export class Panel {
 
 		// Both placements use the same stacked layout for the header, history and composer.
 		this.wrapper.style.display = 'flex'
+		// A dragged launcher/panel position overrides the CSS corner placement.
+		this.#applyPanelPosition()
 		void this.wrapper.offsetHeight
 		this.wrapper.style.opacity = '1'
-		this.wrapper.style.transform =
-			this.#config.position === 'bottom-right' ? 'translateY(0)' : 'translateX(-50%) translateY(0)'
+		this.wrapper.style.transform = this.#getShowTransform()
 	}
 
 	hide(): void {
 		this.wrapper.style.opacity = '0'
-		this.wrapper.style.transform =
-			this.#config.position === 'bottom-right'
-				? 'translateY(100%)' // drawer closes by sliding below its own height
-				: 'translateX(-50%) translateY(20px)'
+		this.wrapper.style.transform = this.#getHideTransform()
 		this.wrapper.style.display = 'none'
 	}
 
@@ -468,7 +490,8 @@ export class Panel {
 	/**
 	 * Restore a previously dragged launcher position (clamped to the viewport).
 	 * Best-effort: an unavailable storage or malformed value falls back to the
-	 * default corner placement without disturbing panel initialization.
+	 * default corner placement without disturbing panel initialization. The
+	 * restored coordinates become the shared floating anchor for the panel.
 	 */
 	#restoreLauncherPosition(launcher: HTMLElement): void {
 		try {
@@ -489,27 +512,28 @@ export class Panel {
 
 			const maxLeft = Math.max(0, window.innerWidth - width)
 			const maxTop = Math.max(0, window.innerHeight - height)
-			launcher.style.left = `${Math.min(Math.max(parsed.left, 0), maxLeft)}px`
-			launcher.style.top = `${Math.min(Math.max(parsed.top, 0), maxTop)}px`
+			const left = Math.min(Math.max(parsed.left, 0), maxLeft)
+			const top = Math.min(Math.max(parsed.top, 0), maxTop)
+			launcher.style.left = `${left}px`
+			launcher.style.top = `${top}px`
 			launcher.style.right = 'auto'
 			launcher.style.bottom = 'auto'
 			// The bottom-right placement carries a translateY offset; drop any
 			// transform so the restored position matches the saved coordinates.
 			launcher.style.transform = 'none'
+			this.#floatingPosition = { left, top }
 		} catch {
 			// localStorage may be unavailable (private mode / sandboxed iframe) or
 			// the stored value malformed; keep the default corner placement.
 		}
 	}
 
-	/** Persist the dragged launcher position so it survives page reloads. */
-	#saveLauncherPosition(launcher: HTMLElement): void {
+	/** Persist the shared floating anchor so it survives page reloads. */
+	#saveFloatingPosition(): void {
+		const position = this.#floatingPosition
+		if (!position) return
 		try {
-			const rect = launcher.getBoundingClientRect()
-			window.localStorage.setItem(
-				LAUNCHER_POSITION_STORAGE_KEY,
-				JSON.stringify({ left: rect.left, top: rect.top })
-			)
+			window.localStorage.setItem(LAUNCHER_POSITION_STORAGE_KEY, JSON.stringify(position))
 		} catch {
 			// Persistence is best-effort; an unavailable storage must not break the
 			// drag itself or the panel.
@@ -568,8 +592,9 @@ export class Panel {
 	}
 
 	/**
-	 * Finish a launcher drag: clean up capture/drag state, persist the position,
-	 * and suppress the following click so it never opens the panel.
+	 * Finish a launcher drag: clean up capture/drag state, persist the shared
+	 * floating anchor, and suppress the following click so it never opens the
+	 * panel.
 	 */
 	#handleLauncherPointerEnd(e: PointerEvent): void {
 		const drag = this.#launcherDrag
@@ -584,18 +609,170 @@ export class Panel {
 
 		if (drag.moved) {
 			this.#suppressLauncherClick = true
-			this.#saveLauncherPosition(launcher)
+			const rect = launcher.getBoundingClientRect()
+			this.#floatingPosition = { left: rect.left, top: rect.top }
+			this.#saveFloatingPosition()
 		}
 	}
 
-	/** Show the floating launcher button */
+	/**
+	 * Show the floating launcher button, repositioning it to the shared floating
+	 * anchor when one exists (e.g. after the panel itself was dragged) so the
+	 * launcher always reappears where the assistant last lived.
+	 */
 	#showLauncher(): void {
 		this.#launcher.classList.remove(styles.hidden)
+		const position = this.#floatingPosition
+		if (!position) return
+		// The launcher may have just been display:none, where offsetWidth/Height
+		// are 0; after reveal they hold the real size used for clamping.
+		const width = this.#launcher.offsetWidth
+		const height = this.#launcher.offsetHeight
+		const maxLeft = Math.max(0, window.innerWidth - width)
+		const maxTop = Math.max(0, window.innerHeight - height)
+		this.#launcher.style.left = `${Math.min(Math.max(position.left, 0), maxLeft)}px`
+		this.#launcher.style.top = `${Math.min(Math.max(position.top, 0), maxTop)}px`
+		this.#launcher.style.right = 'auto'
+		this.#launcher.style.bottom = 'auto'
+		this.#launcher.style.transform = 'none'
 	}
 
 	/** Hide the floating launcher button */
 	#hideLauncher(): void {
 		this.#launcher.classList.add(styles.hidden)
+	}
+
+	/**
+	 * Position the panel wrapper from the shared floating anchor, clamped so the
+	 * panel stays fully on-screen at its current (collapsed or expanded) size.
+	 * When no custom anchor exists the configured CSS placement is left as-is.
+	 */
+	#applyPanelPosition(): void {
+		const anchor = this.#floatingPosition
+		if (!anchor || this.wrapper.style.display === 'none') return
+		const width = this.wrapper.offsetWidth
+		if (width <= 0) return
+		const height = this.#panelHeightForCurrentState()
+		const maxLeft = Math.max(0, window.innerWidth - width)
+		const maxTop = Math.max(0, window.innerHeight - height)
+		this.wrapper.style.left = `${Math.min(Math.max(anchor.left, 0), maxLeft)}px`
+		this.wrapper.style.top = `${Math.min(Math.max(anchor.top, 0), maxTop)}px`
+		this.wrapper.style.right = 'auto'
+		this.wrapper.style.bottom = 'auto'
+	}
+
+	/**
+	 * Nominal wrapper height for the current expansion state, mirroring the CSS
+	 * (`.wrapper` 39px collapsed, `.expanded` min(780px, viewport minus margin)).
+	 * Used so clamping targets the final height even while the height transition
+	 * is still running after expand/collapse.
+	 */
+	#panelHeightForCurrentState(): number {
+		const isCompact = window.innerWidth <= 560
+		if (this.#isExpanded) {
+			return Math.min(780, window.innerHeight - (isCompact ? 24 : 32))
+		}
+		return isCompact ? 38 : 39
+	}
+
+	/** Reveal transform for the current placement mode (custom anchor vs CSS). */
+	#getShowTransform(): string {
+		if (this.#floatingPosition) return 'translateY(0)'
+		return this.#config.position === 'bottom-right'
+			? 'translateY(0)'
+			: 'translateX(-50%) translateY(0)'
+	}
+
+	/** Hide transform for the current placement mode (custom anchor vs CSS). */
+	#getHideTransform(): string {
+		if (this.#floatingPosition) return 'translateY(20px)'
+		return this.#config.position === 'bottom-right'
+			? 'translateY(100%)' // drawer closes by sliding below its own height
+			: 'translateX(-50%) translateY(20px)'
+	}
+
+	/**
+	 * Start a panel (header) drag. A press on a control button is ignored so the
+	 * close/expand controls keep their own behavior.
+	 */
+	#handleHeaderPointerDown(e: PointerEvent): void {
+		if (e.button !== 0) return
+		// Pressing a header control button must not start a drag.
+		if ((e.target as HTMLElement).closest(`.${styles.controlButton}`)) return
+		// A new press clears any suppression left over from a cancelled drag.
+		this.#suppressHeaderClick = false
+
+		const header = e.currentTarget as HTMLElement
+		const rect = this.wrapper.getBoundingClientRect()
+		this.#panelDrag = {
+			pointerId: e.pointerId,
+			moved: false,
+			startClientX: e.clientX,
+			startClientY: e.clientY,
+			originLeft: rect.left,
+			originTop: rect.top,
+		}
+		header.setPointerCapture(e.pointerId)
+		e.preventDefault()
+	}
+
+	/**
+	 * Move the panel with the pointer, clamping it inside the viewport. The CSS
+	 * placement is only switched to explicit left/top once the pointer actually
+	 * moves, so a plain click never disturbs the configured placement.
+	 */
+	#handleHeaderPointerMove(e: PointerEvent): void {
+		const drag = this.#panelDrag
+		if (!drag || e.pointerId !== drag.pointerId) return
+
+		const dx = e.clientX - drag.startClientX
+		const dy = e.clientY - drag.startClientY
+		// Ignore sub-threshold jitter so a plain click is not treated as a drag.
+		if (!drag.moved && Math.hypot(dx, dy) < LAUNCHER_DRAG_THRESHOLD_PX) return
+
+		const wrapper = this.wrapper
+		if (!drag.moved) {
+			drag.moved = true
+			// Switch from right/bottom-anchored placement to explicit left/top so
+			// the panel can move freely; keep translateY(0) so it does not jump.
+			wrapper.style.left = `${drag.originLeft}px`
+			wrapper.style.top = `${drag.originTop}px`
+			wrapper.style.right = 'auto'
+			wrapper.style.bottom = 'auto'
+			wrapper.style.transform = 'translateY(0)'
+			wrapper.classList.add(styles.panelDragging)
+		}
+
+		const rect = wrapper.getBoundingClientRect()
+		const maxLeft = Math.max(0, window.innerWidth - rect.width)
+		const maxTop = Math.max(0, window.innerHeight - rect.height)
+		wrapper.style.left = `${Math.min(Math.max(drag.originLeft + dx, 0), maxLeft)}px`
+		wrapper.style.top = `${Math.min(Math.max(drag.originTop + dy, 0), maxTop)}px`
+	}
+
+	/**
+	 * Finish a panel drag: clean up capture/drag state, persist the shared
+	 * floating anchor, and suppress the following click so it never toggles the
+	 * panel between minimized and expanded.
+	 */
+	#handleHeaderPointerEnd(e: PointerEvent): void {
+		const drag = this.#panelDrag
+		if (!drag || e.pointerId !== drag.pointerId) return
+		this.#panelDrag = null
+
+		const header = e.currentTarget as HTMLElement
+		const wrapper = this.wrapper
+		wrapper.classList.remove(styles.panelDragging)
+		if (header.hasPointerCapture(e.pointerId)) {
+			header.releasePointerCapture(e.pointerId)
+		}
+
+		if (drag.moved) {
+			this.#suppressHeaderClick = true
+			const rect = wrapper.getBoundingClientRect()
+			this.#floatingPosition = { left: rect.left, top: rect.top }
+			this.#saveFloatingPosition()
+		}
 	}
 
 	/**
@@ -763,15 +940,29 @@ export class Panel {
 	}
 
 	#setupEventListeners(): void {
-		// Click header area to expand/collapse
-		const header = this.wrapper.querySelector(`.${styles.header}`)!
+		// Click header area to expand/collapse; a real drag (see below) suppresses
+		// the click that follows it so moving the panel never toggles it.
+		const header = this.wrapper.querySelector<HTMLElement>(`.${styles.header}`)!
 		header.addEventListener('click', (e) => {
 			// Don't trigger expand/collapse if clicking on buttons
 			if ((e.target as HTMLElement).closest(`.${styles.controlButton}`)) {
 				return
 			}
+			if (this.#suppressHeaderClick) {
+				this.#suppressHeaderClick = false
+				return
+			}
 			this.#toggle()
 		})
+
+		// Drag the panel header to move the (minimized or expanded) window. This
+		// mirrors the launcher drag and shares the same floating position.
+		if (this.#config.launcherDraggable ?? true) {
+			header.addEventListener('pointerdown', this.#onHeaderPointerDown)
+			header.addEventListener('pointermove', this.#onHeaderPointerMove)
+			header.addEventListener('pointerup', this.#onHeaderPointerEnd)
+			header.addEventListener('pointercancel', this.#onHeaderPointerEnd)
+		}
 
 		// Expand button
 		this.#expandButton.addEventListener('click', (e) => {
@@ -844,12 +1035,14 @@ export class Panel {
 		this.#isExpanded = true
 		this.wrapper.classList.add(styles.expanded)
 		this.#expandButton.textContent = '▲'
+		this.#applyPanelPosition()
 	}
 
 	#collapse(): void {
 		this.#isExpanded = false
 		this.wrapper.classList.remove(styles.expanded)
 		this.#expandButton.textContent = '▼'
+		this.#applyPanelPosition()
 	}
 
 	#updateStatusIndicator(
