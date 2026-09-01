@@ -23,7 +23,23 @@ export interface PanelConfig {
 	 * @default 'bottom-center'
 	 */
 	position?: 'bottom-center' | 'bottom-right'
+	/**
+	 * Whether the floating launcher icon can be dragged to any viewport position.
+	 * The chosen position is kept while the panel stays open/closed on the page
+	 * and (when storage is available) restored across reloads for the same origin.
+	 * @default true
+	 */
+	launcherDraggable?: boolean
 }
+
+/**
+ * Minimum pointer movement (CSS px) before a launcher press counts as a drag.
+ * Smaller jitter is treated as a plain click and still opens the panel.
+ */
+const LAUNCHER_DRAG_THRESHOLD_PX = 4
+
+/** localStorage key holding the dragged launcher position (per-origin JSON). */
+const LAUNCHER_POSITION_STORAGE_KEY = 'page-agent:launcher-position'
 
 /** A completed or active task snapshot rendered in the panel session. */
 interface PanelHistorySession {
@@ -60,6 +76,20 @@ export class Panel {
 	#config: PanelConfig
 	#isExpanded = false
 	#i18n: I18n
+	/** Active launcher drag state, or null when no drag is in progress. */
+	#launcherDrag: {
+		pointerId: number
+		moved: boolean
+		startClientX: number
+		startClientY: number
+		originLeft: number
+		originTop: number
+	} | null = null
+	/**
+	 * True for the single click that follows a real launcher drag, so the drag
+	 * is never mistaken for a click that opens the panel.
+	 */
+	#suppressLauncherClick = false
 	#userAnswerResolver: ((input: string) => void) | null = null
 	#isWaitingForUserAnswer: boolean = false
 	#showResultCard = false
@@ -73,6 +103,9 @@ export class Panel {
 	#historySessions: PanelHistorySession[] = []
 
 	// Event handlers (bound for removal)
+	#onLauncherPointerDown = (e: PointerEvent) => this.#handleLauncherPointerDown(e)
+	#onLauncherPointerMove = (e: PointerEvent) => this.#handleLauncherPointerMove(e)
+	#onLauncherPointerEnd = (e: PointerEvent) => this.#handleLauncherPointerEnd(e)
 	#onStatusChange = () => this.#handleStatusChange()
 	#onHistoryChange = () => this.#handleHistoryChange()
 	#onActivity = (e: Event) => this.#handleActivity((e as CustomEvent<AgentActivity>).detail)
@@ -421,7 +454,138 @@ export class Panel {
 		launcher.classList.add(styles.hidden)
 
 		document.body.appendChild(launcher)
+
+		if (this.#config.launcherDraggable ?? true) {
+			this.#restoreLauncherPosition(launcher)
+			launcher.addEventListener('pointerdown', this.#onLauncherPointerDown)
+			launcher.addEventListener('pointermove', this.#onLauncherPointerMove)
+			launcher.addEventListener('pointerup', this.#onLauncherPointerEnd)
+			launcher.addEventListener('pointercancel', this.#onLauncherPointerEnd)
+		}
 		return launcher
+	}
+
+	/**
+	 * Restore a previously dragged launcher position (clamped to the viewport).
+	 * Best-effort: an unavailable storage or malformed value falls back to the
+	 * default corner placement without disturbing panel initialization.
+	 */
+	#restoreLauncherPosition(launcher: HTMLElement): void {
+		try {
+			const raw = window.localStorage.getItem(LAUNCHER_POSITION_STORAGE_KEY)
+			if (!raw) return
+			const parsed = JSON.parse(raw) as { left?: unknown; top?: unknown }
+			if (typeof parsed.left !== 'number' || typeof parsed.top !== 'number') return
+			if (!Number.isFinite(parsed.left) || !Number.isFinite(parsed.top)) return
+
+			// The launcher starts display:none, where getBoundingClientRect() and
+			// offsetWidth/Height are 0. Reveal it synchronously to measure its real
+			// size (no paint happens between these style changes), then re-hide it.
+			const wasHidden = launcher.classList.contains(styles.hidden)
+			launcher.classList.remove(styles.hidden)
+			const width = launcher.offsetWidth
+			const height = launcher.offsetHeight
+			if (wasHidden) launcher.classList.add(styles.hidden)
+
+			const maxLeft = Math.max(0, window.innerWidth - width)
+			const maxTop = Math.max(0, window.innerHeight - height)
+			launcher.style.left = `${Math.min(Math.max(parsed.left, 0), maxLeft)}px`
+			launcher.style.top = `${Math.min(Math.max(parsed.top, 0), maxTop)}px`
+			launcher.style.right = 'auto'
+			launcher.style.bottom = 'auto'
+			// The bottom-right placement carries a translateY offset; drop any
+			// transform so the restored position matches the saved coordinates.
+			launcher.style.transform = 'none'
+		} catch {
+			// localStorage may be unavailable (private mode / sandboxed iframe) or
+			// the stored value malformed; keep the default corner placement.
+		}
+	}
+
+	/** Persist the dragged launcher position so it survives page reloads. */
+	#saveLauncherPosition(launcher: HTMLElement): void {
+		try {
+			const rect = launcher.getBoundingClientRect()
+			window.localStorage.setItem(
+				LAUNCHER_POSITION_STORAGE_KEY,
+				JSON.stringify({ left: rect.left, top: rect.top })
+			)
+		} catch {
+			// Persistence is best-effort; an unavailable storage must not break the
+			// drag itself or the panel.
+		}
+	}
+
+	/**
+	 * Start dragging the launcher: switch from right/bottom-anchored placement
+	 * to explicit left/top so it can be moved to any viewport position.
+	 */
+	#handleLauncherPointerDown(e: PointerEvent): void {
+		if (e.button !== 0) return
+		// A new press clears any suppression left over from a cancelled drag.
+		this.#suppressLauncherClick = false
+
+		const launcher = this.#launcher
+		const rect = launcher.getBoundingClientRect()
+		launcher.style.left = `${rect.left}px`
+		launcher.style.top = `${rect.top}px`
+		launcher.style.right = 'auto'
+		launcher.style.bottom = 'auto'
+		// Drop the CSS transform (hover lift / bottom-right translateY) so
+		// getBoundingClientRect() and the left/top we set stay consistent.
+		launcher.style.transform = 'none'
+		launcher.classList.add(styles.dragging)
+
+		this.#launcherDrag = {
+			pointerId: e.pointerId,
+			moved: false,
+			startClientX: e.clientX,
+			startClientY: e.clientY,
+			originLeft: rect.left,
+			originTop: rect.top,
+		}
+		launcher.setPointerCapture(e.pointerId)
+		e.preventDefault()
+	}
+
+	/** Move the launcher with the pointer, clamping it inside the viewport. */
+	#handleLauncherPointerMove(e: PointerEvent): void {
+		const drag = this.#launcherDrag
+		if (!drag || e.pointerId !== drag.pointerId) return
+
+		const dx = e.clientX - drag.startClientX
+		const dy = e.clientY - drag.startClientY
+		// Ignore sub-threshold jitter so a plain click is not treated as a drag.
+		if (!drag.moved && Math.hypot(dx, dy) < LAUNCHER_DRAG_THRESHOLD_PX) return
+		drag.moved = true
+
+		const launcher = this.#launcher
+		const rect = launcher.getBoundingClientRect()
+		const maxLeft = Math.max(0, window.innerWidth - rect.width)
+		const maxTop = Math.max(0, window.innerHeight - rect.height)
+		launcher.style.left = `${Math.min(Math.max(drag.originLeft + dx, 0), maxLeft)}px`
+		launcher.style.top = `${Math.min(Math.max(drag.originTop + dy, 0), maxTop)}px`
+	}
+
+	/**
+	 * Finish a launcher drag: clean up capture/drag state, persist the position,
+	 * and suppress the following click so it never opens the panel.
+	 */
+	#handleLauncherPointerEnd(e: PointerEvent): void {
+		const drag = this.#launcherDrag
+		if (!drag || e.pointerId !== drag.pointerId) return
+		this.#launcherDrag = null
+
+		const launcher = this.#launcher
+		launcher.classList.remove(styles.dragging)
+		if (launcher.hasPointerCapture(e.pointerId)) {
+			launcher.releasePointerCapture(e.pointerId)
+		}
+
+		if (drag.moved) {
+			this.#suppressLauncherClick = true
+			this.#saveLauncherPosition(launcher)
+		}
 	}
 
 	/** Show the floating launcher button */
@@ -633,9 +797,14 @@ export class Panel {
 			this.#handleActionButton()
 		})
 
-		// Launcher button (reopen a closed panel)
+		// Launcher button (reopen a closed panel); a real drag is suppressed below
+		// so moving the icon never opens the panel.
 		this.#launcher.addEventListener('click', (e) => {
 			e.stopPropagation()
+			if (this.#suppressLauncherClick) {
+				this.#suppressLauncherClick = false
+				return
+			}
 			this.show()
 			this.expand()
 		})

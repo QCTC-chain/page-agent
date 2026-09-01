@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Panel } from './Panel'
+import { Panel, type PanelConfig } from './Panel'
 import type { PanelAgentAdapter, PanelHandoff } from './types'
 
 import styles from './Panel.module.css'
@@ -430,6 +430,183 @@ describe('Panel conversation cards', () => {
 		panel.close()
 		panel.wrapper.querySelector(`.${styles.launcher}`)?.dispatchEvent(new Event('click'))
 		expect(panel.wrapper.querySelector(`.${styles.doneSuccess}`)).toBeNull()
+	})
+})
+
+describe('Panel launcher drag (repositionable icon)', () => {
+	const LAUNCHER_STORAGE_KEY = 'page-agent:launcher-position'
+	const VIEW_W = 1280
+	const VIEW_H = 800
+	const LAUNCHER_SIZE = 76
+	const panels: Panel[] = []
+
+	beforeEach(() => {
+		window.localStorage.clear()
+		Object.defineProperty(window, 'innerWidth', { value: VIEW_W, configurable: true })
+		Object.defineProperty(window, 'innerHeight', { value: VIEW_H, configurable: true })
+	})
+
+	afterEach(() => {
+		panels.splice(0).forEach((panel) => panel.dispose())
+		document.body.innerHTML = ''
+		vi.restoreAllMocks()
+		window.localStorage.clear()
+	})
+
+	/** Build a panel, close it so the launcher is visible, and return the launcher. */
+	function createWithLauncher(config: PanelConfig = {}): {
+		agent: FakeAgent
+		panel: Panel
+		launcher: HTMLElement
+	} {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent, config)
+		panel.close()
+		const launcher = document.getElementById(LAUNCHER_ID)!
+		panels.push(panel)
+		return { agent, panel, launcher }
+	}
+
+	/**
+	 * Mock the launcher's measured layout. getBoundingClientRect reflects the
+	 * inline left/top set by the drag (happy-dom has no layout engine), so the
+	 * value saved at drag end matches where the icon actually landed.
+	 */
+	function mockLayout(launcher: HTMLElement, left: number, top: number): void {
+		vi.spyOn(launcher, 'getBoundingClientRect').mockImplementation(() => {
+			const l = Number.parseFloat(launcher.style.left) || left
+			const t = Number.parseFloat(launcher.style.top) || top
+			return {
+				left: l,
+				top: t,
+				right: l + LAUNCHER_SIZE,
+				bottom: t + LAUNCHER_SIZE,
+				width: LAUNCHER_SIZE,
+				height: LAUNCHER_SIZE,
+				x: l,
+				y: t,
+				toJSON: () => ({}),
+			}
+		})
+	}
+
+	/** Simulate a primary-button pointer drag across the launcher. */
+	function drag(launcher: HTMLElement, from: [number, number], to: [number, number]): void {
+		const opts = { pointerId: 1, bubbles: true }
+		launcher.dispatchEvent(
+			new PointerEvent('pointerdown', { ...opts, button: 0, clientX: from[0], clientY: from[1] })
+		)
+		launcher.dispatchEvent(
+			new PointerEvent('pointermove', { ...opts, clientX: to[0], clientY: to[1] })
+		)
+		launcher.dispatchEvent(
+			new PointerEvent('pointerup', { ...opts, clientX: to[0], clientY: to[1] })
+		)
+	}
+
+	it('drags the launcher to a new viewport position', () => {
+		const { launcher } = createWithLauncher()
+		mockLayout(launcher, 100, 200)
+		drag(launcher, [100, 200], [240, 320])
+
+		expect(launcher.style.left).toBe('240px')
+		expect(launcher.style.top).toBe('320px')
+		expect(launcher.style.right).toBe('auto')
+		expect(launcher.style.bottom).toBe('auto')
+		expect(launcher.classList.contains(styles.dragging)).toBe(false)
+	})
+
+	it('clamps the launcher inside the viewport while dragging', () => {
+		const { launcher } = createWithLauncher()
+		mockLayout(launcher, 100, 200)
+		// Drag far beyond the top-right corner; the icon must stay on screen.
+		drag(launcher, [100, 200], [-5000, 5000])
+
+		expect(launcher.style.left).toBe('0px')
+		expect(launcher.style.top).toBe(`${VIEW_H - LAUNCHER_SIZE}px`)
+	})
+
+	it('does not open the panel when the launcher is dragged', () => {
+		const { panel, launcher } = createWithLauncher()
+		mockLayout(launcher, 100, 200)
+		drag(launcher, [100, 200], [200, 200])
+		// Browsers fire a click after a drag (pointer capture retargets it); it
+		// must be swallowed so moving the icon never opens the panel.
+		launcher.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+		expect(panel.wrapper.style.display).toBe('none')
+		expect(launcher.classList.contains(styles.hidden)).toBe(false)
+	})
+
+	it('opens the panel on a plain click (no drag)', () => {
+		const { panel, launcher } = createWithLauncher()
+		mockLayout(launcher, 100, 200)
+
+		launcher.click()
+
+		expect(panel.wrapper.style.display).not.toBe('none')
+		expect(launcher.classList.contains(styles.hidden)).toBe(true)
+	})
+
+	it('keeps the dragged position after closing and reopening the panel', () => {
+		const { panel, launcher } = createWithLauncher()
+		mockLayout(launcher, 100, 200)
+		drag(launcher, [100, 200], [240, 320])
+
+		panel.show()
+		panel.close()
+
+		expect(launcher.style.left).toBe('240px')
+		expect(launcher.style.top).toBe('320px')
+	})
+
+	it('persists the dragged position to localStorage', () => {
+		const { launcher } = createWithLauncher()
+		mockLayout(launcher, 100, 200)
+		drag(launcher, [100, 200], [240, 320])
+
+		const saved = JSON.parse(window.localStorage.getItem(LAUNCHER_STORAGE_KEY)!)
+		expect(saved).toEqual({ left: 240, top: 320 })
+	})
+
+	it('restores a previously saved position on a new panel', () => {
+		window.localStorage.setItem(LAUNCHER_STORAGE_KEY, JSON.stringify({ left: 60, top: 500 }))
+		// The restore measures the launcher size via offsetWidth/Height before the
+		// panel is constructed, so mock the prototype getters up front.
+		vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(LAUNCHER_SIZE)
+		vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(LAUNCHER_SIZE)
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panels.push(panel)
+		const launcher = document.getElementById(LAUNCHER_ID)!
+
+		expect(launcher.style.left).toBe('60px')
+		expect(launcher.style.top).toBe('500px')
+		expect(launcher.style.right).toBe('auto')
+		expect(launcher.style.bottom).toBe('auto')
+	})
+
+	it('clamps a restored position to the current viewport', () => {
+		window.localStorage.setItem(LAUNCHER_STORAGE_KEY, JSON.stringify({ left: 5000, top: -50 }))
+		vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(LAUNCHER_SIZE)
+		vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(LAUNCHER_SIZE)
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panels.push(panel)
+		const launcher = document.getElementById(LAUNCHER_ID)!
+
+		expect(launcher.style.left).toBe(`${VIEW_W - LAUNCHER_SIZE}px`)
+		expect(launcher.style.top).toBe('0px')
+	})
+
+	it('leaves the launcher fixed when launcherDraggable is false', () => {
+		const { launcher } = createWithLauncher({ launcherDraggable: false })
+		mockLayout(launcher, 100, 200)
+		drag(launcher, [100, 200], [240, 320])
+
+		expect(launcher.style.left).toBe('')
+		expect(launcher.style.top).toBe('')
+		expect(window.localStorage.getItem(LAUNCHER_STORAGE_KEY)).toBeNull()
 	})
 })
 

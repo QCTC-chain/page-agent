@@ -580,6 +580,10 @@
 		0 10px 30px rgba(73, 105, 199, 0.26),
 		0 0 0 7px rgba(146, 183, 255, 0.14);
 	cursor: pointer;
+	/* Allow pointer-event dragging (touch + mouse) without scrolling/selection. */
+	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
 	transition:
 		transform 0.2s ease,
 		box-shadow 0.2s ease;
@@ -591,12 +595,26 @@
 		min-height: 66px !important;
 		max-height: 66px !important;
 		object-fit: contain;
+		/* Keep the button as the sole drag/click target and block native image drag. */
+		pointer-events: none;
+		user-select: none;
+		-webkit-user-drag: none;
 	}
 	&:hover {
 		transform: translateY(-2px) scale(1.04);
 		box-shadow:
 			0 14px 34px rgba(73, 105, 199, 0.34),
 			0 0 0 8px rgba(146, 183, 255, 0.18);
+	}
+	&.dragging {
+		/* Disable hover lift / transitions while dragging so the icon tracks the
+		 * pointer 1:1 (position is applied inline via left/top). */
+		transform: none !important;
+		transition: none !important;
+		cursor: grabbing !important;
+		box-shadow:
+			0 10px 30px rgba(73, 105, 199, 0.26),
+			0 0 0 7px rgba(146, 183, 255, 0.14);
 	}
 	&.hidden {
 		display: none;
