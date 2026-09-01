@@ -166,6 +166,34 @@ export interface AgentConfig extends LLMConfig {
 	 * @default 0.4
 	 */
 	stepDelay?: number
+
+	/**
+	 * LLM-view history windowing (LLM/UI view separation).
+	 *
+	 * When set, `<agent_history>` in the LLM prompt only contains the most recent
+	 * `maxStepEvents` step events; older steps are replaced by a one-line compaction
+	 * marker. The full history is still kept on `agent.history` for UI rendering,
+	 * debugging, and multi-page migration — only what the model sees is windowed.
+	 *
+	 * The model is expected to track long-range progress through the `memory`
+	 * reflection field, which is repeated on every kept step.
+	 *
+	 * @example
+	 * historyView: { maxStepEvents: 5 }
+	 */
+	historyView?: { maxStepEvents?: number }
+
+	/**
+	 * Replace `<browser_state>` content with a short placeholder when the page
+	 * did not change since the previous step (e.g. after a failed click or a wait).
+	 *
+	 * The DOM snapshot is usually the largest block in the prompt; skipping it for
+	 * unchanged pages saves a full re-prefill of those tokens. Element indexes from
+	 * the last full snapshot remain valid because the page is unchanged.
+	 *
+	 * @default false (opt-in: tasks that re-read page text every step should keep this off)
+	 */
+	dedupeUnchangedBrowserState?: boolean
 }
 
 /**
