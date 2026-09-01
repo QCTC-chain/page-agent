@@ -64,6 +64,31 @@ describe('normalizeResponse content fallback', () => {
 		expect(args.action.done.text).toBe('ok')
 	})
 
+	it('recovers JSON missing the final closing brace (truncation tail)', () => {
+		// Regression: the model stopped right after the last value, dropping the
+		// outermost `}` (real-world under-closed sample). The repair appends the
+		// missing closers before parsing.
+		const content = '{"next_goal":"done","action":{"done":{"text":"ok","success":true}}'
+		const args = normalizedArguments(content)
+		expect(args.action.done.text).toBe('ok')
+		expect(args.action.done.success).toBe(true)
+	})
+
+	it('recovers JSON missing multiple closing braces', () => {
+		const content = '{"action":{"wait":{"seconds":1}'
+		const args = normalizedArguments(content)
+		expect(args.action.wait.seconds).toBe(1)
+	})
+
+	it('does not false-repair a value cut off mid-token', () => {
+		// Repair is attempted (braces appendable) but the content still cannot
+		// parse, so the extraction must give up cleanly.
+		const content = '{"action":{"wait":{"seconds":'
+		expect(() => normalizeResponse(responseWithContent(content))).toThrow(
+			/does not contain valid JSON/
+		)
+	})
+
 	it('throws with the raw content appended when no JSON object is present', () => {
 		const content = '抱歉，我无法完成该任务'
 		expect(() => normalizeResponse(responseWithContent(content))).toThrow(
@@ -71,8 +96,17 @@ describe('normalizeResponse content fallback', () => {
 		)
 	})
 
-	it('throws when the JSON object is never closed', () => {
+	it('recovers a complete object that is only missing its closing braces', () => {
+		// The string values are complete and closed; only the trailing `}`s are
+		// missing, so the under-close repair turns this into a valid AgentOutput.
 		const content = '{"action":{"done":{"text":"truncated"'
+		const args = normalizedArguments(content)
+		expect(args.action.done.text).toBe('truncated')
+	})
+
+	it('throws when a string value is cut off mid-literal', () => {
+		// A cut inside a string literal can never be fixed by appending braces.
+		const content = '{"action":{"done":{"text":"truncated'
 		expect(() => normalizeResponse(responseWithContent(content))).toThrow(
 			/does not contain valid JSON/
 		)

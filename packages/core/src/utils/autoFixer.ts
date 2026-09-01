@@ -185,14 +185,18 @@ function safeJsonParse(input: any): any {
  * Extract and parse the first balanced JSON object from a string.
  *
  * Uses a string-aware brace-depth scan instead of a greedy "first `{` to last
- * `}`" regex, so trailing garbage AFTER the object (e.g. a stray backtick and
- * an over-closed `}` emitted by the model after a complete JSON object) no
- * longer corrupts the extraction: the scan stops at the `}` that balances the
- * opening `{`, ignoring braces inside JSON string literals.
+ * `}`" regex, handling the two real-world degeneration tails seen from the
+ * model:
+ * - Over-closed: garbage after the object (e.g. a stray backtick and an extra
+ *   `}`) — the scan stops at the `}` that balances the opening `{`, ignoring
+ *   braces inside JSON string literals.
+ * - Under-closed: the object is complete except for missing trailing `}`s —
+ *   the missing closers are appended (best-effort repair) and the result is
+ *   parsed; if that still fails, null is returned.
  *
  * @param str - Raw LLM message content, possibly with prose or code fences.
- * @returns The parsed value of the first balanced `{...}` block, or null when
- *          no balanced JSON object is found.
+ * @returns The parsed value of the first `{...}` block (repaired if needed),
+ *          or null when no recoverable JSON object is found.
  */
 function retrieveJsonFromString(str: string): any {
 	const start = str.indexOf('{')
@@ -221,6 +225,18 @@ function retrieveJsonFromString(str: string): any {
 					return null
 				}
 			}
+		}
+	}
+	// Scan ended without balance: the model under-closed the object. Repair by
+	// appending the missing closers; give up cleanly if it still won't parse
+	// (e.g. truncation mid-string or mid-value). A cut inside a string literal
+	// can never be fixed by appending braces, so skip the attempt there.
+	if (depth > 0 && !inString) {
+		try {
+			log('#6: repairing under-closed JSON')
+			return JSON.parse(str.slice(start) + '}'.repeat(depth))
+		} catch {
+			return null
 		}
 	}
 	return null
