@@ -407,6 +407,57 @@ describe('Panel conversation cards', () => {
 		expect(result.querySelector(`.${styles.resultContent} strong`)?.textContent).toBe('用户名')
 	})
 
+	it('keeps the previous session result card when a new task runs in the same panel', () => {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panels.push(panel)
+
+		// Session 1 settles with a result card.
+		agent.task = 'first task'
+		agent.history = [
+			{
+				type: 'step',
+				stepIndex: 0,
+				action: { name: 'done', input: { text: 'first result' }, output: '' },
+			},
+		]
+		agent.lastResult = { success: true, data: 'first result' }
+		agent.setStatus('completed')
+		expect(panel.wrapper.querySelectorAll(`.${styles.doneSuccess}`).length).toBe(1)
+
+		// Session 2 starts: new task string + new history array reference.
+		agent.task = 'second task'
+		agent.history = [
+			{
+				type: 'step',
+				stepIndex: 0,
+				action: { name: 'read', input: { path: 'a.md' }, output: 'ok' },
+			},
+		]
+		agent.lastResult = null
+		agent.dispatchEvent(new Event('historychange'))
+		agent.setStatus('running')
+
+		// The first session's result card must survive the new run.
+		expect(panel.wrapper.textContent).toContain('first result')
+		expect(panel.wrapper.querySelectorAll(`.${styles.doneSuccess}`).length).toBe(1)
+
+		// Session 2 settles too: both result cards are rendered.
+		agent.history.push({
+			type: 'step',
+			stepIndex: 1,
+			action: { name: 'done', input: { text: 'second result' }, output: '' },
+		})
+		agent.lastResult = { success: true, data: 'second result' }
+		agent.dispatchEvent(new Event('historychange'))
+		agent.setStatus('completed')
+
+		const cards = panel.wrapper.querySelectorAll(`.${styles.doneSuccess}`)
+		expect(cards.length).toBe(2)
+		expect(cards[0].textContent).toContain('first result')
+		expect(cards[1].textContent).toContain('second result')
+	})
+
 	it('does not carry a completed result card into a reset session', () => {
 		const agent = new FakeAgent()
 		const panel = new Panel(agent)

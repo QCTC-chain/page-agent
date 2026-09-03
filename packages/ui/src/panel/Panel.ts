@@ -46,6 +46,9 @@ const LAUNCHER_POSITION_STORAGE_KEY = 'page-agent:launcher-position'
 interface PanelHistorySession {
 	task: string
 	history: PanelAgentAdapter['history']
+	/** Final result snapshot, persisted once the task settles so later
+	 * sessions in the same panel never wipe it from the history. */
+	result?: { success: boolean; content: string }
 }
 
 /**
@@ -121,7 +124,6 @@ export class Panel {
 	#suppressHeaderClick = false
 	#userAnswerResolver: ((input: string) => void) | null = null
 	#isWaitingForUserAnswer: boolean = false
-	#showResultCard = false
 	/** Reference used to distinguish a new core task from incremental history updates. */
 	#activeCoreHistory: PanelAgentAdapter['history'] | null = null
 	/**
@@ -130,6 +132,15 @@ export class Panel {
 	 * here until the user closes it.
 	 */
 	#historySessions: PanelHistorySession[] = []
+
+	/** task+history snapshot captured on close/reset. Prevents the render-time
+	 * session sync from resurrecting the just-cleared UI history while the
+	 * reusable agent still holds the settled task; a new task (different task
+	 * string or history array reference) clears the guard. */
+	#closedSnapshot: {
+		task: string
+		history: PanelAgentAdapter['history']
+	} | null = null
 
 	// Event handlers (bound for removal)
 	#onLauncherPointerDown = (e: PointerEvent) => this.#handleLauncherPointerDown(e)
@@ -212,8 +223,6 @@ export class Panel {
 	/** Handle agent status change */
 	#handleStatusChange(): void {
 		const status = this.#agent.status
-		if (status === 'running') this.#showResultCard = false
-		if (status === 'completed' || status === 'error') this.#showResultCard = true
 		// A fresh run starts a fresh stream area; settled runs hand over to the
 		// persisted result/history cards.
 		if (status === 'running') this.#resetStream()
@@ -406,7 +415,9 @@ export class Panel {
 		this.#statusText.textContent = this.#i18n.t('ui.panel.ready')
 		this.#updateStatusIndicator('thinking')
 		this.#historySessions = []
-		this.#showResultCard = false
+		this.#closedSnapshot = this.#agent.task
+			? { task: this.#agent.task, history: this.#agent.history }
+			: null
 		this.#renderHistory()
 		this.#renderActivity(null)
 		this.#collapse()
@@ -1268,11 +1279,22 @@ export class Panel {
 		const task = this.#agent.task
 		if (!task) return
 
-		const latestSession = this.#historySessions.at(-1)
 		const coreHistory = this.#agent.history
+		// After close/reset the UI history is intentionally empty; do not let
+		// the render-time sync rebuild it from the still-settled agent state.
+		if (
+			this.#historySessions.length === 0 &&
+			this.#closedSnapshot?.task === task &&
+			this.#closedSnapshot.history === coreHistory
+		) {
+			return
+		}
+
+		const latestSession = this.#historySessions.at(-1)
 		if (!latestSession || latestSession.task !== task || this.#activeCoreHistory !== coreHistory) {
 			this.#historySessions.push({ task, history: [...coreHistory] })
 			this.#activeCoreHistory = coreHistory
+			this.#closedSnapshot = null
 			return
 		}
 
@@ -1385,6 +1407,12 @@ export class Panel {
 	 * 3. Observations
 	 */
 	#renderHistory(): void {
+		// Sync first so a settle signal arriving before any historychange still
+		// finds its session (idempotent), then persist the settled result onto
+		// its session so each conversation keeps its own Result card.
+		this.#syncHistorySession()
+		this.#persistLatestResult()
+
 		const items: string[] = []
 
 		for (const session of this.#historySessions) {
@@ -1392,10 +1420,8 @@ export class Panel {
 			for (const event of session.history) {
 				items.push(...this.#createHistoryCards(event))
 			}
+			if (session.result) items.push(createResultCard(session.result))
 		}
-
-		const resultCard = this.#createResultCard()
-		if (resultCard) items.push(resultCard)
 
 		// Card HTML is escaped by `escapeHtml` in `createCard`; task/history
 		// content never reaches innerHTML unescaped.
@@ -1408,24 +1434,37 @@ export class Panel {
 		return createCard({ icon: '🎯', content: task, type: 'input' })
 	}
 
-	/** Build the final result card from the latest completed agent result. */
-	#createResultCard(): string | null {
-		if (!this.#showResultCard) return null
-		if (this.#agent.status !== 'completed' && this.#agent.status !== 'error') return null
+	/**
+	 * Persist the settled agent result onto the latest session (idempotent).
+	 * Called from rendering so the snapshot lands regardless of the order the
+	 * core emits `statuschange` / `historychange` / `resultchange` in.
+	 */
+	#persistLatestResult(): void {
+		const status = this.#agent.status
+		if (status !== 'completed' && status !== 'error') return
 		const result = this.#agent.lastResult
-		if (!result) return null
+		if (!result) return
 
 		const latestSession = this.#historySessions.at(-1)
-		const doneEvent = latestSession?.history
+		if (!latestSession || latestSession.result) return
+		latestSession.result = {
+			success: result.success,
+			content: this.#resolveResultContent(latestSession, result),
+		}
+	}
+
+	/** Resolve the result card text: explicit data, else the done action text. */
+	#resolveResultContent(
+		session: PanelHistorySession,
+		result: { success: boolean; data?: string }
+	): string {
+		const doneEvent = session.history
 			.slice()
 			.reverse()
 			.find((event) => event.type === 'step' && event.action?.name === 'done')
 		const doneInput =
 			doneEvent?.type === 'step' ? (doneEvent.action?.input as { text?: string }) : null
-		const content =
-			result.data || doneInput?.text || (result.success ? 'Task completed' : 'Task failed')
-
-		return createResultCard({ success: result.success, content })
+		return result.data || doneInput?.text || (result.success ? 'Task completed' : 'Task failed')
 	}
 
 	/** Create cards for a history event */
