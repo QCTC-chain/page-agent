@@ -2,7 +2,7 @@ import { I18n, type SupportedLanguage } from '../i18n'
 import { truncate } from '../utils'
 import assistantLogoUrl from './assets/assistant-logo.png'
 import { createCard, createReflectionLines, createResultCard, createStepCard } from './cards'
-import type { AgentActivity, PanelAgentAdapter, PanelHandoff } from './types'
+import type { AgentActivity, PanelAgentAdapter, PanelHandoff, PanelStreamProgress } from './types'
 
 import styles from './Panel.module.css'
 
@@ -65,6 +65,14 @@ export class Panel {
 	#statusText: HTMLElement
 	#historySection: HTMLElement
 	#activitySection: HTMLElement
+	/** Live-answer stream area (tool steps + typewriter answer), below the activity card. */
+	#streamSection: HTMLElement
+	#streamStepsEl: HTMLElement
+	#streamAnswerEl: HTMLElement
+	/** Buffered answer text before the stream is confirmed as a renderable qa stream. */
+	#streamBuffer = ''
+	/** True once a `progress` chunk arrived (qa-stream signature): render deltas live. */
+	#streamConfirmed = false
 	#expandButton: HTMLElement
 	#actionButton: HTMLElement
 	#inputSection: HTMLElement
@@ -133,6 +141,9 @@ export class Panel {
 	#onStatusChange = () => this.#handleStatusChange()
 	#onHistoryChange = () => this.#handleHistoryChange()
 	#onActivity = (e: Event) => this.#handleActivity((e as CustomEvent<AgentActivity>).detail)
+	#onStreamDelta = (e: Event) => this.#handleStreamDelta((e as CustomEvent<string>).detail)
+	#onStreamProgress = (e: Event) =>
+		this.#handleStreamProgress((e as CustomEvent<PanelStreamProgress>).detail)
 	#onHandoffChange = () => this.#renderHandoffCard()
 	#onAgentDispose = () => this.dispose()
 	#onExpandableTextClick = (e: Event) => this.#handleExpandableTextEvent(e)
@@ -164,6 +175,9 @@ export class Panel {
 		this.#statusText = this.#wrapper.querySelector(`.${styles.statusText}`)!
 		this.#historySection = this.#wrapper.querySelector(`.${styles.historySection}`)!
 		this.#activitySection = this.#wrapper.querySelector(`.${styles.activitySection}`)!
+		this.#streamSection = this.#wrapper.querySelector(`.${styles.streamSection}`)!
+		this.#streamStepsEl = this.#wrapper.querySelector(`.${styles.streamSteps}`)!
+		this.#streamAnswerEl = this.#wrapper.querySelector(`.${styles.streamAnswer}`)!
 		this.#expandButton = this.#wrapper.querySelector(`.${styles.expandButton}`)!
 		this.#actionButton = this.#wrapper.querySelector(`.${styles.stopButton}`)!
 		this.#inputSection = this.#wrapper.querySelector(`.${styles.inputSectionWrapper}`)!
@@ -179,6 +193,8 @@ export class Panel {
 		this.#agent.addEventListener('statuschange', this.#onStatusChange)
 		this.#agent.addEventListener('historychange', this.#onHistoryChange)
 		this.#agent.addEventListener('activity', this.#onActivity)
+		this.#agent.addEventListener('streamdelta', this.#onStreamDelta)
+		this.#agent.addEventListener('streamprogress', this.#onStreamProgress)
 		this.#agent.addEventListener('handoffchange', this.#onHandoffChange)
 		this.#agent.addEventListener('dispose', this.#onAgentDispose)
 		this.#historySection.addEventListener('click', this.#onExpandableTextClick)
@@ -198,6 +214,17 @@ export class Panel {
 		const status = this.#agent.status
 		if (status === 'running') this.#showResultCard = false
 		if (status === 'completed' || status === 'error') this.#showResultCard = true
+		// A fresh run starts a fresh stream area; settled runs hand over to the
+		// persisted result/history cards.
+		if (status === 'running') this.#resetStream()
+		if (
+			status === 'completed' ||
+			status === 'error' ||
+			status === 'stopped' ||
+			status === 'migrated'
+		) {
+			this.#clearStream()
+		}
 
 		// Map agent status to UI indicator. A `completed` run whose result reports
 		// failure shows as error; other statuses map to their own indicator.
@@ -406,6 +433,8 @@ export class Panel {
 		this.#agent.removeEventListener('statuschange', this.#onStatusChange)
 		this.#agent.removeEventListener('historychange', this.#onHistoryChange)
 		this.#agent.removeEventListener('activity', this.#onActivity)
+		this.#agent.removeEventListener('streamdelta', this.#onStreamDelta)
+		this.#agent.removeEventListener('streamprogress', this.#onStreamProgress)
 		this.#agent.removeEventListener('handoffchange', this.#onHandoffChange)
 		this.#agent.removeEventListener('dispose', this.#onAgentDispose)
 		this.#historySection.removeEventListener('click', this.#onExpandableTextClick)
@@ -894,10 +923,14 @@ export class Panel {
 		// pi-lens-ignore: no-inner-html
 		wrapper.innerHTML = `
 			<div class="${styles.background}"></div>
-			<div class="${styles.historySectionWrapper}">
-				<div class="${styles.historySection}"></div>
-				<div class="${styles.activitySection} ${styles.hidden}"></div>
-			</div>
+				<div class="${styles.historySectionWrapper}">
+					<div class="${styles.historySection}"></div>
+					<div class="${styles.activitySection} ${styles.hidden}"></div>
+					<div class="${styles.streamSection} ${styles.hidden}">
+						<div class="${styles.streamSteps}"></div>
+						<div class="${styles.streamAnswer} ${styles.hidden}"></div>
+					</div>
+				</div>
 			<div class="${styles.header}">
 				<div class="${styles.statusSection}">
 					<img class="${styles.assistantLogo}" src="${assistantLogoUrl}" alt="AI助手" />
@@ -1123,6 +1156,95 @@ export class Panel {
 		tempCard.innerHTML = createCard({ icon, content: text, type })
 		this.#activitySection.replaceChildren(tempCard.firstElementChild!)
 		this.#activitySection.classList.remove(styles.hidden)
+	}
+
+	// ========== Live stream rendering (guidance-api knowledge_qa) ==========
+
+	/** qa read-only tool whitelist → friendly step labels. */
+	static readonly #STREAM_TOOL_LABELS: Record<string, string> = {
+		read: '读取知识',
+		grep: '检索知识',
+		find: '查找文件',
+		ls: '浏览目录',
+	}
+
+	/** Cap for the unconfirmed delta buffer (chat-intent JSON fragments). */
+	static readonly #STREAM_BUFFER_MAX = 16384
+
+	/**
+	 * Handle one answer delta.
+	 *
+	 * Deltas are buffered until the stream is confirmed as a renderable qa
+	 * stream (first `progress` chunk). Unconfirmed streams are chat-intent
+	 * `AgentOutput` JSON fragments — rendering those as a typewriter would
+	 * only leak raw JSON, so they stay buffered and are dropped on reset.
+	 */
+	#handleStreamDelta(text: string): void {
+		if (!this.#streamConfirmed) {
+			this.#streamBuffer += text
+			if (this.#streamBuffer.length > Panel.#STREAM_BUFFER_MAX) {
+				this.#streamBuffer = this.#streamBuffer.slice(-Panel.#STREAM_BUFFER_MAX)
+			}
+			return
+		}
+		this.#appendStreamAnswer(text)
+	}
+
+	/**
+	 * Handle one tool-progress chunk: confirms the stream, renders the step
+	 * list row (start adds a running row; end updates it in place).
+	 */
+	#handleStreamProgress(progress: PanelStreamProgress): void {
+		if (!this.#streamConfirmed) {
+			this.#streamConfirmed = true
+			this.#streamSection.classList.remove(styles.hidden)
+			// Flush the buffered answer as the typewriter's initial text.
+			if (this.#streamBuffer) {
+				const buffered = this.#streamBuffer
+				this.#streamBuffer = ''
+				this.#appendStreamAnswer(buffered)
+			}
+		}
+		const label = Panel.#STREAM_TOOL_LABELS[progress.tool] ?? progress.tool
+		if (progress.phase === 'start') {
+			const row = document.createElement('div')
+			row.className = styles.streamStep
+			row.dataset.tool = progress.tool
+			row.textContent = `⏳ ${label}`
+			this.#streamStepsEl.appendChild(row)
+			return
+		}
+		// end: update the most recent running row with the same tool name
+		const rows = this.#streamStepsEl.querySelectorAll<HTMLElement>(
+			`.${styles.streamStep}[data-tool="${progress.tool}"]`
+		)
+		const target = rows[rows.length - 1]
+		if (target) {
+			target.classList.toggle(styles.streamStepError, progress.isError === true)
+			target.textContent = `${progress.isError === true ? '⚠' : '✓'} ${label}`
+		}
+	}
+
+	/** Append typewriter text (textContent only — model text is never HTML). */
+	#appendStreamAnswer(text: string): void {
+		this.#streamAnswerEl.classList.remove(styles.hidden)
+		this.#streamAnswerEl.appendChild(document.createTextNode(text))
+		this.#streamAnswerEl.scrollTop = this.#streamAnswerEl.scrollHeight
+	}
+
+	/** Reset per-run stream state (called when a new task starts). */
+	#resetStream(): void {
+		this.#streamBuffer = ''
+		this.#streamConfirmed = false
+		this.#streamStepsEl.replaceChildren()
+		this.#streamAnswerEl.replaceChildren()
+		this.#streamAnswerEl.classList.add(styles.hidden)
+		this.#streamSection.classList.add(styles.hidden)
+	}
+
+	/** Hide the stream area without touching buffered state (task settled). */
+	#clearStream(): void {
+		this.#streamSection.classList.add(styles.hidden)
 	}
 
 	/**

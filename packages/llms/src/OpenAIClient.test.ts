@@ -407,3 +407,193 @@ describe('OpenAIClient.invoke — abort', () => {
 		})
 	})
 })
+
+// ---------- Native streaming (SSE) ----------
+
+function sseResponse(frames: string[]): Response {
+	const encoder = new TextEncoder()
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const frame of frames) controller.enqueue(encoder.encode(frame))
+			controller.close()
+		},
+	})
+	return new Response(stream, {
+		status: 200,
+		headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+	})
+}
+
+function sseChunk(payload: Record<string, unknown>): string {
+	return `data: ${JSON.stringify(payload)}\n\n`
+}
+
+/** Mini content→tool_calls normalizer mirroring core's autoFixer fallback. */
+function normalizeContentResponse(response: any): any {
+	const choice = response.choices?.[0]
+	const toolCall = choice?.message?.tool_calls?.[0]
+	if (toolCall?.function?.arguments) return response
+	const content = typeof choice?.message?.content === 'string' ? choice.message.content.trim() : ''
+	if (!content) return response
+	return {
+		...response,
+		choices: [
+			{
+				...choice,
+				message: {
+					...choice.message,
+					tool_calls: [
+						{
+							id: 'call_sse',
+							type: 'function',
+							function: { name: 'AgentOutput', arguments: content },
+						},
+					],
+				},
+			},
+		],
+	}
+}
+
+const streamOptions = { toolChoiceName: 'AgentOutput', normalizeResponse: normalizeContentResponse }
+const agentOutputTools: Record<string, Tool<any, string>> = {
+	AgentOutput: {
+		description: 'macro output',
+		inputSchema: z.any(),
+		execute: vi.fn(async (args) => JSON.stringify(args)),
+	},
+}
+
+describe('OpenAIClient.invoke — native SSE streaming', () => {
+	const tools = { greet: makeTool() }
+	const signal = new AbortController().signal
+
+	it('sets stream:true in the request body when config.stream is enabled', async () => {
+		const { client, fetchMock } = makeClient({ stream: true })
+		fetchMock.mockResolvedValue(jsonResponse(toolCallBody('greet', { name: 'x' })))
+		await client.invoke([], tools, signal)
+		expect(getSentBody(fetchMock).stream).toBe(true)
+	})
+
+	it('omits stream from the request body by default', async () => {
+		const { client, fetchMock } = makeClient()
+		fetchMock.mockResolvedValue(jsonResponse(toolCallBody('greet', { name: 'x' })))
+		await client.invoke([], tools, signal)
+		expect(getSentBody(fetchMock).stream).toBeUndefined()
+	})
+
+	it('lets transformRequestBody still override the stream flag', async () => {
+		const { client, fetchMock } = makeClient({
+			stream: true,
+			transformRequestBody: (body) => ({ ...body, stream: false }),
+		})
+		fetchMock.mockResolvedValue(jsonResponse(toolCallBody('greet', { name: 'x' })))
+		await client.invoke([], tools, signal)
+		expect(getSentBody(fetchMock).stream).toBe(false)
+	})
+
+	it('consumes a guidance_qa stream: delta callbacks, sanitized progress, AgentOutput{done} synthesis, usage', async () => {
+		const deltas: string[] = []
+		const progressEvents: unknown[] = []
+		const { client, fetchMock } = makeClient({
+			stream: true,
+			onStreamDelta: (text) => deltas.push(text),
+			onStreamProgress: (progress) => progressEvents.push(progress),
+		})
+		fetchMock.mockResolvedValue(
+			sseResponse([
+				sseChunk({
+					choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+				}),
+				sseChunk({ choices: [], progress: { phase: 'start', tool: 'grep', args: 'raw query' } }),
+				sseChunk({
+					choices: [{ index: 0, delta: { content: '答案第一段' }, finish_reason: null }],
+				}),
+				sseChunk({ choices: [], progress: { phase: 'end', tool: 'grep', isError: false } }),
+				sseChunk({
+					choices: [{ index: 0, delta: { content: '答案第二段' }, finish_reason: null }],
+				}),
+				sseChunk({ choices: [], guidance_done: { success: true } }),
+				sseChunk({
+					choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+					usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+				}),
+				'data: [DONE]\n\n',
+			])
+		)
+
+		const result = await client.invoke([], agentOutputTools, signal, streamOptions)
+
+		// deltas fire per content chunk
+		expect(deltas).toEqual(['答案第一段', '答案第二段'])
+
+		// progress is sanitized down to the whitelist (args dropped)
+		expect(progressEvents).toEqual([
+			{ phase: 'start', tool: 'grep' },
+			{ phase: 'end', tool: 'grep' },
+		])
+
+		// synthesized AgentOutput{done} flows through normalizeResponse → done tool
+		expect(result.toolCall.name).toBe('AgentOutput')
+		expect(result.toolCall.args.action.done).toEqual({
+			text: '答案第一段答案第二段',
+			success: true,
+		})
+		expect(result.usage.totalTokens).toBe(10)
+	})
+
+	it('preserves failure semantics from guidance_done{success:false}', async () => {
+		const { client, fetchMock } = makeClient({ stream: true })
+		fetchMock.mockResolvedValue(
+			sseResponse([
+				sseChunk({ choices: [], guidance_done: { success: false, truncated: true } }),
+				'data: [DONE]\n\n',
+			])
+		)
+		const result = await client.invoke([], agentOutputTools, signal, streamOptions)
+		expect(result.toolCall.args.action.done.success).toBe(false)
+	})
+
+	it('reassembles a plain chat stream (no guidance_done) as accumulated content', async () => {
+		const { client, fetchMock } = makeClient({ stream: true })
+		fetchMock.mockResolvedValue(
+			sseResponse([
+				sseChunk({ choices: [{ index: 0, delta: { content: '{"action"' }, finish_reason: null }] }),
+				sseChunk({ choices: [{ index: 0, delta: { content: ':{"done":' }, finish_reason: null }] }),
+				sseChunk({
+					choices: [
+						{
+							index: 0,
+							delta: { content: '{"text":"hi","success":true}}}' },
+							finish_reason: 'stop',
+						},
+					],
+				}),
+				'data: [DONE]\n\n',
+			])
+		)
+		const result = await client.invoke([], agentOutputTools, signal, streamOptions)
+		expect(result.toolCall.args.action.done).toEqual({ text: 'hi', success: true })
+	})
+
+	it('skips malformed SSE frames without failing the stream', async () => {
+		const { client, fetchMock } = makeClient({ stream: true })
+		fetchMock.mockResolvedValue(
+			sseResponse([
+				'data: {not json}\n\n',
+				sseChunk({ choices: [], guidance_done: { success: true } }),
+				': comment frame\n\n',
+				'data: [DONE]\n\n',
+			])
+		)
+		const result = await client.invoke([], agentOutputTools, signal, streamOptions)
+		expect(result.toolCall.args.action.done.text).toBe('')
+	})
+
+	it('falls back to buffered JSON parsing for non-SSE responses even with stream enabled', async () => {
+		const { client, fetchMock } = makeClient({ stream: true })
+		fetchMock.mockResolvedValue(jsonResponse(toolCallBody('greet', { name: 'x' })))
+		const result = await client.invoke([], tools, signal)
+		expect(result.toolCall.name).toBe('greet')
+	})
+})

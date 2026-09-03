@@ -92,6 +92,17 @@ export interface InvokeResult<TResult = unknown> {
 }
 
 /**
+ * Sanitized upstream tool-progress notification (guidance-api qa stream).
+ * Only the whitelist fields survive: phase/tool/isError — arguments and
+ * results are never forwarded (they may contain file contents).
+ */
+export interface LLMStreamProgress {
+	phase: 'start' | 'end'
+	tool: string
+	isError?: boolean
+}
+
+/**
  * LLM configuration
  */
 export interface LLMConfig {
@@ -129,6 +140,28 @@ export interface LLMConfig {
 	 * The response should follow OpenAI API format.
 	 */
 	customFetch?: typeof globalThis.fetch
+
+	/**
+	 * Request streaming (`"stream": true`) from OpenAI-compatible upstreams.
+	 * When the response is an SSE stream (`text/event-stream`), the client
+	 * consumes it incrementally (invoking the `onStream*` callbacks), then
+	 * reassembles a complete `chat.completion` object so downstream parsing
+	 * (normalizeResponse / tool-call validation) is unchanged. Non-SSE
+	 * responses fall back to buffered JSON parsing.
+	 */
+	stream?: boolean
+
+	/** Incremental answer-text callback (fired per SSE content delta). */
+	onStreamDelta?: (text: string) => void
+
+	/** Incremental tool-progress callback (guidance-api qa streams only). */
+	onStreamProgress?: (progress: LLMStreamProgress) => void
 }
 
-export type ResolvedLLMConfig = Required<Omit<LLMConfig, 'temperature'>> & { temperature?: number }
+export type ResolvedLLMConfig = Required<
+	Omit<LLMConfig, 'temperature' | 'onStreamDelta' | 'onStreamProgress'>
+> & {
+	temperature?: number
+	onStreamDelta?: (text: string) => void
+	onStreamProgress?: (progress: LLMStreamProgress) => void
+}

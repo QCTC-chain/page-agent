@@ -44,6 +44,18 @@ export interface PanelHandoff {
 }
 
 /**
+ * Sanitized LLM stream tool-progress event (guidance-api knowledge_qa streams).
+ * Structurally identical to the llms package's LLMStreamProgress; declared
+ * locally so the UI package keeps its dependency-free adapter boundary.
+ * Events dispatched: CustomEvent<PanelStreamProgress> on 'streamprogress'.
+ */
+export interface PanelStreamProgress {
+	phase: 'start' | 'end'
+	tool: string
+	isError?: boolean
+}
+
+/**
  * Minimal interface that Panel expects from an agent.
  * Panel does not depend on PageAgent directly - it only requires this interface.
  * This enables decoupling and allows any agent implementation to work with Panel.

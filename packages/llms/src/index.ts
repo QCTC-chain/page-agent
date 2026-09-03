@@ -105,5 +105,8 @@ export function parseLLMConfig(config: LLMConfig): ResolvedLLMConfig {
 		transformRequestBody: config.transformRequestBody ?? ((requestBody) => requestBody),
 		disableNamedToolChoice: config.disableNamedToolChoice ?? false,
 		customFetch: (config.customFetch ?? fetch).bind(globalThis), // fetch will be illegal unless bound
+		stream: config.stream ?? false,
+		onStreamDelta: config.onStreamDelta,
+		onStreamProgress: config.onStreamProgress,
 	}
 }

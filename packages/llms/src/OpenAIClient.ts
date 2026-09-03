@@ -8,11 +8,26 @@ import type {
 	InvokeOptions,
 	InvokeResult,
 	LLMClient,
+	LLMStreamProgress,
 	Message,
 	ResolvedLLMConfig,
 	Tool,
 } from './types'
 import { modelPatch, zodToOpenAITool } from './utils'
+
+/**
+ * Sanitize a raw `progress` field from an SSE chunk down to the whitelist
+ * (phase/tool/isError). Arguments and results are dropped: they may contain
+ * upstream file contents and must never reach the browser UI.
+ */
+function sanitizeStreamProgress(raw: unknown): LLMStreamProgress | null {
+	if (!raw || typeof raw !== 'object') return null
+	const record = raw as Record<string, unknown>
+	const phase = record.phase === 'start' ? 'start' : 'end'
+	const tool = typeof record.tool === 'string' ? record.tool : ''
+	if (!tool) return null
+	return record.isError === true ? { phase, tool, isError: true } : { phase, tool }
+}
 
 /**
  * Client for OpenAI compatible APIs
@@ -54,6 +69,11 @@ export class OpenAIClient implements LLMClient {
 		// Only sent if the caller explicitly set it. Most new models throw if this is set.
 		if (this.config.temperature !== undefined) {
 			requestBody.temperature = this.config.temperature
+		}
+		// Native streaming: opt in to SSE and let #consumeSseStream reassemble a
+		// complete completion below (config.stream defaults to false).
+		if (this.config.stream) {
+			requestBody.stream = true
 		}
 
 		// Merge the caller's non-standard metadata extension (e.g. guidance-api's
@@ -138,15 +158,23 @@ export class OpenAIClient implements LLMClient {
 
 		// 4. Parse and validate response
 		let data: any
-		try {
-			data = await response.json()
-		} catch (error) {
-			if ((error as any)?.name === 'AbortError') throw error
-			throw new InvokeError(
-				InvokeErrorTypes.INVALID_RESPONSE,
-				'Response body is not valid JSON',
-				error
-			)
+		// (headers may be absent on fakes/stubs — stay defensive)
+		const contentType = response.headers?.get('content-type') || ''
+		if (contentType.includes('text/event-stream')) {
+			// SSE upstream: consume incrementally (onStream* callbacks fire as
+			// chunks arrive) and reassemble a buffered-equivalent completion.
+			data = await this.#consumeSseStream(response)
+		} else {
+			try {
+				data = await response.json()
+			} catch (error) {
+				if ((error as any)?.name === 'AbortError') throw error
+				throw new InvokeError(
+					InvokeErrorTypes.INVALID_RESPONSE,
+					'Response body is not valid JSON',
+					error
+				)
+			}
 		}
 
 		const choice = data.choices?.[0]
@@ -276,6 +304,117 @@ export class OpenAIClient implements LLMClient {
 			},
 			rawResponse: data,
 			rawRequest: finalRequestBody,
+		}
+	}
+
+	/**
+	 * Consume an OpenAI-compatible SSE stream and reassemble a buffered-
+	 * equivalent `chat.completion` object.
+	 *
+	 * Protocol notes (guidance-api extensions are additive and ignorable by
+	 * standard OpenAI clients):
+	 * - `choices[0].delta.content` chunks are accumulated into the final message
+	 *   content; each chunk also fires `config.onStreamDelta`.
+	 * - `progress` chunks are sanitized to the phase/tool/isError whitelist and
+	 *   forwarded via `config.onStreamProgress`.
+	 * - a trailing `guidance_done` marker (knowledge_qa streams) wraps the
+	 *   accumulated text as an `AgentOutput{done}` JSON string, matching the
+	 *   buffered-mode response shape downstream parsing expects.
+	 * - `usage` / `finish_reason` chunks are recorded for the final object.
+	 *
+	 * Aborts propagate as AbortError; malformed frames are skipped silently.
+	 */
+	async #consumeSseStream(response: Response): Promise<any> {
+		if (!response.body) {
+			// No streamable body (should not happen for text/event-stream, but stay
+			// defensive): fall back to buffered parsing.
+			return await response.json()
+		}
+
+		const reader = response.body.getReader()
+		const decoder = new TextDecoder()
+		let buffer = ''
+		let content = ''
+		let usage: any
+		let finishReason: string | null = null
+		let guidanceDone: { success?: boolean } | null = null
+
+		/** Parse one `data:` payload (a JSON chunk or `[DONE]`, which is a no-op). */
+		const handleData = (data: string): void => {
+			if (!data || data === '[DONE]') return
+			let event: any
+			try {
+				event = JSON.parse(data)
+			} catch {
+				return // malformed frames are skipped
+			}
+			if (!event || typeof event !== 'object') return
+			if (event.progress) {
+				const progress = sanitizeStreamProgress(event.progress)
+				if (progress) this.config.onStreamProgress?.(progress)
+				return
+			}
+			if (event.guidance_done) guidanceDone = event.guidance_done
+			if (event.usage) usage = event.usage
+			const choice = event.choices?.[0]
+			if (!choice) return
+			if (choice.finish_reason) finishReason = choice.finish_reason
+			const text = choice.delta?.content
+			if (typeof text === 'string' && text) {
+				content += text
+				this.config.onStreamDelta?.(text)
+			}
+		}
+
+		/** Extract every `data:` line from one SSE frame (blank-line delimited). */
+		const handleFrame = (frame: string): void => {
+			for (const line of frame.split('\n')) {
+				if (line.startsWith('data:')) handleData(line.slice(5).trim())
+			}
+		}
+
+		try {
+			for (;;) {
+				const { done, value } = await reader.read()
+				if (value) {
+					buffer += decoder.decode(value, { stream: true })
+					let index = buffer.indexOf('\n\n')
+					while (index !== -1) {
+						handleFrame(buffer.slice(0, index))
+						buffer = buffer.slice(index + 2)
+						index = buffer.indexOf('\n\n')
+					}
+				}
+				if (done) break
+			}
+			buffer += decoder.decode() // flush the tail
+			if (buffer.trim()) handleFrame(buffer)
+		} catch (error) {
+			if ((error as any)?.name === 'AbortError') throw error
+			throw new InvokeError(InvokeErrorTypes.NETWORK_ERROR, 'SSE stream read failed', error)
+		}
+
+		// Re-read through a snapshot: TS control-flow cannot see closure writes.
+		const doneMarker = guidanceDone as { success?: boolean } | null
+		const finalContent = doneMarker
+			? JSON.stringify({
+					action: { done: { text: content, success: doneMarker.success !== false } },
+				})
+			: content
+
+		return {
+			id: `chatcmpl-sse-${Date.now().toString(36)}`,
+			object: 'chat.completion',
+			created: Math.floor(Date.now() / 1000),
+			model: this.config.model,
+			choices: [
+				{
+					index: 0,
+					message: { role: 'assistant', content: finalContent },
+					finish_reason: finishReason || 'stop',
+				},
+			],
+			...(usage ? { usage } : {}),
 		}
 	}
 }

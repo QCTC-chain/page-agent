@@ -65,6 +65,10 @@ if (autoInit) {
 			const enableMultiPage = url.searchParams.get('multiPage') === 'true'
 			// Mask defaults to enabled (PageAgent behavior); pass enableMask=false to disable.
 			const enableMask = url.searchParams.get('enableMask') !== 'false'
+			// Native SSE streaming (guidance-api knowledge_qa): stream=true makes the
+			// LLM client request SSE, reassemble it, and lets the Panel render the
+			// live answer typewriter + tool steps.
+			const enableStream = url.searchParams.get('stream') === 'true'
 			showPanel = ((url.searchParams.get('showPanel') as 'true' | 'false') || 'true') === 'true'
 
 			// Context governance: bounded browser_state + windowed LLM history view
@@ -78,6 +82,7 @@ if (autoInit) {
 				position,
 				enableMultiPage,
 				enableMask,
+				stream: enableStream,
 				viewportExpansion: perf.viewportExpansion,
 				historyView: perf.historyView,
 				dedupeUnchangedBrowserState: perf.dedupeUnchangedBrowserState,

@@ -859,3 +859,85 @@ function wrapperHiddenState(): void {
 	const wrapper = document.getElementById(PANEL_ID)!
 	wrapper.querySelector<HTMLButtonElement>('button[title="Close"]')!.click()
 }
+
+describe('Panel live stream rendering (knowledge_qa)', () => {
+	const panels: Panel[] = []
+
+	function createPanel(): { agent: FakeAgent; panel: Panel } {
+		const agent = new FakeAgent()
+		const panel = new Panel(agent)
+		panel.show()
+		panels.push(panel)
+		return { agent, panel }
+	}
+
+	afterEach(() => {
+		panels.splice(0).forEach((panel) => panel.dispose())
+		document.body.innerHTML = ''
+		vi.restoreAllMocks()
+	})
+
+	function emitStream(
+		agent: FakeAgent,
+		type: 'streamdelta' | 'streamprogress',
+		detail: unknown
+	): void {
+		agent.dispatchEvent(new CustomEvent(type, { detail }))
+	}
+
+	it('buffers deltas before confirmation and drops them when the stream is chat-intent JSON', () => {
+		const { agent } = createPanel()
+		agent.setStatus('running')
+		emitStream(agent, 'streamdelta', '{"action":{"done"')
+
+		const streamSection = document.querySelector(`.${styles.streamSection}`)! as HTMLElement
+		expect(streamSection.classList.contains(styles.hidden)).toBe(true)
+		expect(document.querySelector(`.${styles.streamAnswer}`)).not.toBeNull()
+
+		// Task settles: buffered chat fragments are discarded, result card takes over.
+		agent.lastResult = { success: true, data: 'done' }
+		agent.setStatus('completed')
+		expect(streamSection.classList.contains(styles.hidden)).toBe(true)
+	})
+
+	it('renders tool steps and typewriter answer once progress confirms the qa stream', () => {
+		const { agent } = createPanel()
+		agent.setStatus('running')
+
+		// Early deltas arrive before any progress chunk → buffered.
+		emitStream(agent, 'streamdelta', '日前价差交易')
+		// First progress confirms the qa stream and flushes the buffer.
+		emitStream(agent, 'streamprogress', { phase: 'start', tool: 'grep' })
+		// Subsequent deltas append live.
+		emitStream(agent, 'streamdelta', '是指……')
+		emitStream(agent, 'streamprogress', { phase: 'end', tool: 'grep' })
+
+		const steps = document.querySelectorAll(`.${styles.streamStep}`)
+		expect(steps).toHaveLength(1)
+		expect(steps[0].textContent).toBe('✓ 检索知识')
+
+		const answer = document.querySelector(`.${styles.streamAnswer}`)! as HTMLElement
+		expect(answer.textContent).toBe('日前价差交易是指……')
+
+		// A failed tool end flips the row to the error style.
+		emitStream(agent, 'streamprogress', { phase: 'start', tool: 'read' })
+		emitStream(agent, 'streamprogress', { phase: 'end', tool: 'read', isError: true })
+		const failedRow = document.querySelectorAll(`.${styles.streamStep}`)[1]!
+		expect(failedRow.textContent).toBe('⚠ 读取知识')
+		expect(failedRow.classList.contains(styles.streamStepError)).toBe(true)
+	})
+
+	it('resets the stream area when a new task starts', () => {
+		const { agent } = createPanel()
+		agent.setStatus('running')
+		emitStream(agent, 'streamprogress', { phase: 'start', tool: 'grep' })
+		emitStream(agent, 'streamdelta', '答案')
+
+		agent.setStatus('completed')
+		agent.setStatus('running')
+
+		expect(document.querySelectorAll(`.${styles.streamStep}`)).toHaveLength(0)
+		const answer = document.querySelector(`.${styles.streamAnswer}`)! as HTMLElement
+		expect(answer.textContent).toBe('')
+	})
+})

@@ -59,6 +59,21 @@ export class PageAgent extends PageAgentCore {
 		// needs the agent (constructed by super()). Resolve the reference lazily.
 		const handoffRef: HandoffControllerRef = { current: null }
 		const enhancedConfig: PageAgentCoreConfig = { ...config, pageController }
+		// Re-dispatch LLM stream callbacks as agent events so the built-in Panel
+		// can render the live answer typewriter / tool steps (the callbacks may
+		// also fire before `super()` finishes wiring — closures only touch `this`
+		// at call time, which is always after construction). Unconditional: no
+		// stream, no events.
+		const userOnStreamDelta = config.onStreamDelta
+		const userOnStreamProgress = config.onStreamProgress
+		enhancedConfig.onStreamDelta = (text) => {
+			this.dispatchEvent(new CustomEvent('streamdelta', { detail: text }))
+			userOnStreamDelta?.(text)
+		}
+		enhancedConfig.onStreamProgress = (progress) => {
+			this.dispatchEvent(new CustomEvent('streamprogress', { detail: progress }))
+			userOnStreamProgress?.(progress)
+		}
 		if (config.enableMultiPage) {
 			enhancedConfig.multiPage = true
 			enhancedConfig.customTools = {
