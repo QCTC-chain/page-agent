@@ -925,11 +925,14 @@ export class Panel {
 			<div class="${styles.background}"></div>
 				<div class="${styles.historySectionWrapper}">
 					<div class="${styles.historySection}"></div>
-					<div class="${styles.activitySection} ${styles.hidden}"></div>
+					<!-- Stream steps sit ABOVE the activity card ("正在思考...")
+					     so the concrete tool progress (读取知识 · …) reads as the
+					     live detail of what the thinking is doing. -->
 					<div class="${styles.streamSection} ${styles.hidden}">
 						<div class="${styles.streamSteps}"></div>
 						<div class="${styles.streamAnswer} ${styles.hidden}"></div>
 					</div>
+					<div class="${styles.activitySection} ${styles.hidden}"></div>
 				</div>
 			<div class="${styles.header}">
 				<div class="${styles.statusSection}">
