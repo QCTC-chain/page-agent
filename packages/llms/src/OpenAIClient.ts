@@ -56,6 +56,16 @@ export class OpenAIClient implements LLMClient {
 			requestBody.temperature = this.config.temperature
 		}
 
+		// Merge the caller's non-standard metadata extension (e.g. guidance-api's
+		// `metadata.intent_context` for intent routing). Additive: upstreams that
+		// ignore unknown fields are unaffected.
+		if (options?.metadata) {
+			requestBody.metadata = {
+				...(requestBody.metadata as Record<string, unknown> | undefined),
+				...options.metadata,
+			}
+		}
+
 		modelPatch(requestBody, this.config.baseURL)
 
 		let transformedBody: Record<string, unknown> | undefined

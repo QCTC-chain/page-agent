@@ -117,6 +117,33 @@ describe('OpenAIClient.invoke — request construction', () => {
 		expect((init.headers as Record<string, string>).Authorization).toBeUndefined()
 	})
 
+	it('merges options.metadata into the request body when provided', async () => {
+		await setup.client.invoke([], tools, signal, {
+			toolChoiceName: 'greet',
+			metadata: {
+				intent_context: {
+					user_question: '打开持仓收益页面',
+					current_url: 'https://saas.example.com/workspace',
+					current_route: '',
+					page_title: '工作台',
+				},
+			},
+		})
+		expect(getSentBody(setup.fetchMock).metadata).toEqual({
+			intent_context: {
+				user_question: '打开持仓收益页面',
+				current_url: 'https://saas.example.com/workspace',
+				current_route: '',
+				page_title: '工作台',
+			},
+		})
+	})
+
+	it('omits metadata from the request body when not provided', async () => {
+		await setup.client.invoke([], tools, signal)
+		expect(getSentBody(setup.fetchMock).metadata).toBeUndefined()
+	})
+
 	it('applies transformRequestBody (in-place form, returns undefined)', async () => {
 		const { client, fetchMock } = makeClient({
 			transformRequestBody: (body) => {

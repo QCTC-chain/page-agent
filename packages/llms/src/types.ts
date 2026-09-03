@@ -48,6 +48,13 @@ export interface InvokeOptions {
 	 * Used to fix various response format errors from the model.
 	 */
 	normalizeResponse?: (response: any) => any
+	/**
+	 * Non-standard top-level request-body extension (OpenAI-compatible upstreams
+	 * that ignore unknown fields accept it; e.g. guidance-api reads
+	 * `metadata.intent_context` for intent routing and forwards it untouched).
+	 * Merged into the request body as-is when provided.
+	 */
+	metadata?: Record<string, unknown>
 }
 
 /**

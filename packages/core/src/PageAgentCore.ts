@@ -353,6 +353,19 @@ export class PageAgentCore extends EventTarget {
 					const result = await this.#llm.invoke(messages, macroTool, signal, {
 						toolChoiceName: 'AgentOutput',
 						normalizeResponse: (res) => normalizeResponse(res, this.tools),
+						// guidance-api intent routing context (checklist §2.2/§3):
+						// additive metadata; upstreams that ignore unknown fields are
+						// unaffected, and old guidance-api versions simply ignore it.
+						metadata: {
+							intent_context: {
+								user_question: this.task,
+								current_url: this.#states.browserState?.url || '',
+								// The host-provided route is not known here; kept empty
+								// unless a host integration extends it.
+								current_route: '',
+								page_title: this.#states.browserState?.title || '',
+							},
+						},
 					})
 
 					// assemble history

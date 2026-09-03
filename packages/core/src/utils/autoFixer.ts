@@ -72,7 +72,11 @@ export function normalizeResponse(response: any, tools?: Map<string, PageAgentTo
 					resolvedArguments = { action: safeJsonParse(resolvedArguments) }
 				}
 			} else {
-				throw new Error('No tool_call and the message content does not contain valid JSON')
+				// Include the raw content in the error: it is the essential clue
+				// when diagnosing model refusals / non-JSON answers.
+				throw new Error(
+					`No tool_call and the message content does not contain valid JSON: ${content}`
+				)
 			}
 		} else {
 			throw new Error('No tool_call nor message content is present')
