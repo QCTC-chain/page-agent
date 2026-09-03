@@ -93,13 +93,16 @@ export interface InvokeResult<TResult = unknown> {
 
 /**
  * Sanitized upstream tool-progress notification (guidance-api qa stream).
- * Only the whitelist fields survive: phase/tool/isError — arguments and
- * results are never forwarded (they may contain file contents).
+ * Only the whitelist fields survive: phase/tool/isError/detail — arguments
+ * and results are never forwarded (they may contain file contents). detail
+ * is the server's controlled summary (path tail or grep pattern), never
+ * file content.
  */
 export interface LLMStreamProgress {
 	phase: 'start' | 'end'
 	tool: string
 	isError?: boolean
+	detail?: string
 }
 
 /**

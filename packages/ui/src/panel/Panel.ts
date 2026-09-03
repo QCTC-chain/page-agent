@@ -1206,11 +1206,17 @@ export class Panel {
 			}
 		}
 		const label = Panel.#STREAM_TOOL_LABELS[progress.tool] ?? progress.tool
+		// detail is the server's controlled summary (path tail / grep pattern);
+		// appended with a separator only when present.
+		const suffix = progress.detail ? ` · ${progress.detail}` : ''
 		if (progress.phase === 'start') {
 			const row = document.createElement('div')
 			row.className = styles.streamStep
 			row.dataset.tool = progress.tool
-			row.textContent = `⏳ ${label}`
+			// Stash the summary so the end frame (which carries no detail)
+			// can restore it instead of wiping it from the completed row.
+			row.dataset.detail = progress.detail ?? ''
+			row.textContent = `⏳ ${label}${suffix}`
 			this.#streamStepsEl.appendChild(row)
 			return
 		}
@@ -1221,7 +1227,10 @@ export class Panel {
 		const target = rows[rows.length - 1]
 		if (target) {
 			target.classList.toggle(styles.streamStepError, progress.isError === true)
-			target.textContent = `${progress.isError === true ? '⚠' : '✓'} ${label}`
+			// End frames carry no detail upstream; keep the start frame's summary
+			// so the completed row still shows what was read/searched.
+			const keptSuffix = target.dataset.detail ? ` · ${target.dataset.detail}` : ''
+			target.textContent = `${progress.isError === true ? '⚠' : '✓'} ${label}${keptSuffix}`
 		}
 	}
 

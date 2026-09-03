@@ -53,6 +53,8 @@ export interface PanelStreamProgress {
 	phase: 'start' | 'end'
 	tool: string
 	isError?: boolean
+	/** Controlled server-side summary: path tail or grep search pattern. */
+	detail?: string
 }
 
 /**

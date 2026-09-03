@@ -17,7 +17,7 @@ import { modelPatch, zodToOpenAITool } from './utils'
 
 /**
  * Sanitize a raw `progress` field from an SSE chunk down to the whitelist
- * (phase/tool/isError). Arguments and results are dropped: they may contain
+ * (phase/tool/isError/detail). Arguments and results are dropped: they may contain
  * upstream file contents and must never reach the browser UI.
  */
 function sanitizeStreamProgress(raw: unknown): LLMStreamProgress | null {
@@ -26,7 +26,11 @@ function sanitizeStreamProgress(raw: unknown): LLMStreamProgress | null {
 	const phase = record.phase === 'start' ? 'start' : 'end'
 	const tool = typeof record.tool === 'string' ? record.tool : ''
 	if (!tool) return null
-	return record.isError === true ? { phase, tool, isError: true } : { phase, tool }
+	// detail is the server-controlled summary (path tail / grep pattern);
+	// non-string or oversized values are dropped as browser-side defense.
+	const detail = typeof record.detail === 'string' ? record.detail.slice(0, 80) : ''
+	const base = record.isError === true ? { phase, tool, isError: true } : { phase, tool }
+	return detail ? { ...base, detail } : base
 }
 
 /**
@@ -315,8 +319,8 @@ export class OpenAIClient implements LLMClient {
 	 * standard OpenAI clients):
 	 * - `choices[0].delta.content` chunks are accumulated into the final message
 	 *   content; each chunk also fires `config.onStreamDelta`.
-	 * - `progress` chunks are sanitized to the phase/tool/isError whitelist and
-	 *   forwarded via `config.onStreamProgress`.
+	 * - `progress` chunks are sanitized to the phase/tool/isError/detail
+	 *   whitelist and forwarded via `config.onStreamProgress`.
 	 * - a trailing `guidance_done` marker (knowledge_qa streams) wraps the
 	 *   accumulated text as an `AgentOutput{done}` JSON string, matching the
 	 *   buffered-mode response shape downstream parsing expects.
